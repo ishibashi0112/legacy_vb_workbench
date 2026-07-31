@@ -537,7 +537,8 @@ async function exportRepomix(
 		return;
 	}
 	try {
-		fs.writeFileSync(saveUri.fsPath, output.content, "utf8");
+		// BOM 付き UTF-8 で保存(Windows 系ツールのエンコーディング誤判定を防ぐ)
+		fs.writeFileSync(saveUri.fsPath, "\uFEFF" + output.content, "utf8");
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		void vscode.window.showErrorMessage(`出力ファイルを書き込めません: ${message}`);

@@ -21,14 +21,73 @@
   "contributes": {
     "commands": [
       {
+        "command": "legacyVbWorkbench.selectSolution",
+        "title": "Legacy VB: Select Solution",
+        "icon": "$(folder-library)"
+      },
+      {
         "command": "legacyVbWorkbench.selectProject",
-        "title": "Legacy VB: Select VB Project"
+        "title": "Legacy VB: Select VB Project",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "legacyVbWorkbench.refresh",
-        "title": "Legacy VB: Refresh"
+        "title": "Legacy VB: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "legacyVbWorkbench.openFile",
+        "title": "Legacy VB: Open File"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "legacyVbWorkbench",
+          "title": "Legacy VB",
+          "icon": "resources/legacy-vb.svg"
+        }
+      ]
+    },
+    "views": {
+      "legacyVbWorkbench": [
+        {
+          "id": "legacyVbWorkbench.projects",
+          "name": "VB.NET Projects"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "legacyVbWorkbench.projects",
+        "contents": ".sln / .vbproj が選択されていません。\n[Select Solution](command:legacyVbWorkbench.selectSolution)\n[Select VB Project](command:legacyVbWorkbench.selectProject)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "legacyVbWorkbench.selectSolution",
+          "when": "view == legacyVbWorkbench.projects",
+          "group": "navigation@1"
+        },
+        {
+          "command": "legacyVbWorkbench.selectProject",
+          "when": "view == legacyVbWorkbench.projects",
+          "group": "navigation@2"
+        },
+        {
+          "command": "legacyVbWorkbench.refresh",
+          "when": "view == legacyVbWorkbench.projects",
+          "group": "navigation@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "legacyVbWorkbench.openFile",
+          "when": "false"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "pnpm run package",

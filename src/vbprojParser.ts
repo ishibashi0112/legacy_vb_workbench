@@ -8,6 +8,7 @@
 
 import * as path from "path";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
+import { resolveWindowsPath } from "./paths";
 import type {
 	ParseDiagnostic,
 	ProjectItem,
@@ -35,9 +36,6 @@ const MSBUILD_EXPRESSION = /[$@%]\(/;
 
 /** ワイルドカードの検出 */
 const WILDCARD = /[*?]/;
-
-/** ドライブ絶対パス(C:\ など)または UNC(\\server\...) */
-const WINDOWS_ABSOLUTE = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
 /** 値が True のとき Designer 関連とみなすメタデータ */
 const SENSITIVE_FLAG_METADATA = ["AutoGen", "DesignTime", "DesignTimeSharedInput"];
@@ -70,17 +68,6 @@ function toLogicalPath(value: string): string {
 		.split(/[\\/]/)
 		.filter((segment) => segment !== "" && segment !== ".")
 		.join("\\");
-}
-
-/** Include を物理絶対パスへ解決する(式・ワイルドカードを含まない前提) */
-function resolveSourcePath(include: string, projectDir: string): string {
-	if (WINDOWS_ABSOLUTE.test(include)) {
-		// ドライブ絶対パス・UNC は実行環境によらず Windows パスとして正規化する
-		return path.win32.normalize(include);
-	}
-	// 相対パスは .vbproj のディレクトリ基準。`\` 区切りは実行環境の区切りへ変換
-	const platformRelative = include.split(/[\\/]/).join(path.sep);
-	return path.resolve(projectDir, platformRelative);
 }
 
 /** メタデータ名は大文字小文字を区別しない(MSBuild の仕様に合わせる) */
@@ -232,7 +219,7 @@ function buildProjectItem(
 		};
 	}
 
-	const sourcePath = resolveSourcePath(include, projectDir);
+	const sourcePath = resolveWindowsPath(include, projectDir);
 	const exists = deps.fileExists(sourcePath);
 
 	if (condition !== undefined) {

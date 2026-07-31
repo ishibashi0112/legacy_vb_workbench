@@ -68,3 +68,74 @@ export interface VbprojParseResult {
 	items: ProjectItem[];
 	diagnostics: ParseDiagnostic[];
 }
+
+// ---------------------------------------------------------------------------
+// .sln 解析(引き継ぎ仕様書 §18)。Project 行の抽出のみの最小対応
+// ---------------------------------------------------------------------------
+
+/** .sln から抽出した 1 プロジェクト定義 */
+export interface SolutionProject {
+	/** .sln 上の表示名 */
+	name: string;
+	/** .sln に書かれた相対パス(原文のまま) */
+	relativePath: string;
+	/** .sln のディレクトリ基準で解決した絶対パス */
+	absolutePath: string;
+	projectGuid: string;
+	projectTypeGuid: string;
+	/** 実ファイルが存在するか */
+	exists: boolean;
+}
+
+/** parseSln の戻り値 */
+export interface SlnParseResult {
+	solutionPath: string;
+	solutionDir: string;
+	/** .vbproj のプロジェクトのみ(Solution Folder・他言語はスキップし診断へ) */
+	projects: SolutionProject[];
+	diagnostics: ParseDiagnostic[];
+}
+
+// ---------------------------------------------------------------------------
+// 論理ツリー(引き継ぎ仕様書 §10)。vscode.TreeItem には依存しない
+// ---------------------------------------------------------------------------
+
+export interface BaseNode {
+	/** ツリー内で一意な ID(TreeItem.id にそのまま使う) */
+	id: string;
+	label: string;
+	children: LegacyTreeNode[];
+}
+
+export interface SolutionNode extends BaseNode {
+	type: "solution";
+	solutionPath: string;
+}
+
+export interface ProjectNode extends BaseNode {
+	type: "project";
+	projectPath: string;
+}
+
+export interface FolderNode extends BaseNode {
+	type: "folder";
+	/** `\` 区切りの論理フォルダパス */
+	logicalPath: string;
+}
+
+export interface FileNode extends BaseNode {
+	type: "file";
+	item: ProjectItem;
+}
+
+export interface WarningNode extends BaseNode {
+	type: "warning";
+	message: string;
+}
+
+export type LegacyTreeNode =
+	| SolutionNode
+	| ProjectNode
+	| FolderNode
+	| FileNode
+	| WarningNode;

@@ -7,6 +7,7 @@
 import * as fs from "fs";
 import * as vscode from "vscode";
 import { buildLogicalTree, buildSolutionTree } from "./logicalTreeBuilder";
+import { LegacyProjectDragController } from "./legacyProjectDragController";
 import { LegacyProjectTreeProvider } from "./legacyProjectTreeProvider";
 import { parseSln } from "./slnParser";
 import type {
@@ -53,6 +54,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	const provider = new LegacyProjectTreeProvider();
 	const treeView = vscode.window.createTreeView("legacyVbWorkbench.projects", {
 		treeDataProvider: provider,
+		dragAndDropController: new LegacyProjectDragController(),
+		// Ctrl/Cmd+クリックで複数選択してまとめてドラッグできるようにする
+		canSelectMany: true,
 	});
 	context.subscriptions.push(channel, treeView);
 

@@ -26,6 +26,11 @@ export interface RepomixSource {
 export interface RepomixExportDeps {
 	/** ファイルを読み UTF-8 文字列で返す(失敗時 undefined)。エンコーディング変換は呼び出し側 */
 	readTextFile(absolutePath: string): string | undefined;
+	/**
+	 * .gitignore / .repomixignore による除外判定(本家 repomix と同じ挙動)。
+	 * 除外対象なら根拠の ignore ファイルパスを返す。未指定なら判定しない
+	 */
+	ignoreReasonFor?(absolutePath: string): string | undefined;
 }
 
 export interface RepomixExportOptions {
@@ -214,6 +219,14 @@ export function buildRepomixOutput(
 			}
 			// skipReason 通過時点で sourcePath は解決済み
 			const sourcePath = node.item.sourcePath as string;
+			const ignoreSource = deps.ignoreReasonFor?.(sourcePath);
+			if (ignoreSource !== undefined) {
+				skipped.push({
+					path: displayPath,
+					reason: `.gitignore により除外(${ignoreSource})`,
+				});
+				continue;
+			}
 			const rawContent = deps.readTextFile(sourcePath);
 			if (rawContent === undefined) {
 				skipped.push({ path: displayPath, reason: "読み込みに失敗しました" });
@@ -278,6 +291,9 @@ export function buildRepomixOutput(
 		options.maskCredentials
 			? "- 認証情報らしき値は [MASKED] に自動置換済み(<masked_credentials> を参照。機械判定のため漏れの可能性はあり、共有前に目視確認を推奨)"
 			: "- 認証情報の自動マスクは無効(ハードコードされた認証情報がそのまま含まれる可能性あり)",
+		deps.ignoreReasonFor !== undefined
+			? "- .gitignore / .repomixignore に一致するファイルは除外済み(本家 repomix と同様)"
+			: "- .gitignore は考慮していない(設定 exportRespectGitignore で無効化されている)",
 		"- 除外・未解決のファイルは <skipped_files> を参照",
 		"- このファイルは読み取り専用の成果物であり、編集しても元のプロジェクトには反映されない",
 		"</notes>",

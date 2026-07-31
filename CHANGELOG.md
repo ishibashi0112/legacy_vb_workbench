@@ -1,5 +1,14 @@
 # Change Log
 
+## [0.5.0] - 2026-08-01
+
+- Repomix エクスポートで .gitignore / .repomixignore を尊重(本家 repomix と
+  同じ既定挙動。設定 exportRespectGitignore で無効化可)
+  - マッチングは git 仕様実装の ignore パッケージを使用(`!` 否定・ネスト対応)
+  - ファイル位置から上位へ探索し、.git のあるリポジトリルートで打ち切り。
+    git 管理外なら .sln / .vbproj ディレクトリ配下のみ適用
+  - 除外したファイルは <skipped_files> に根拠の ignore ファイル付きで明記
+
 ## [0.4.0] - 2026-08-01
 
 - Repomix エクスポートに認証情報の自動マスクを追加(既定で有効、設定

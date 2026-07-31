@@ -155,6 +155,41 @@ suite("repomixExporter: 認証情報マスク統合", () => {
 	});
 });
 
+suite("repomixExporter: .gitignore 連携", () => {
+	test("ignoreReasonFor が除外を返したファイルはスキップされ理由が明記される", () => {
+		const sources: RepomixSource[] = [{ label: "Basic", parseResult: parseBasic() }];
+		const result = buildRepomixOutput(
+			"Basic.vbproj",
+			sources,
+			{
+				readTextFile: fakeDeps.readTextFile,
+				ignoreReasonFor: (absolutePath) =>
+					absolutePath.endsWith("Module1.vb") ? "/base/.gitignore" : undefined,
+			},
+			{ includeSensitive: false, maskCredentials: false },
+		);
+		assert.ok(!result.content.includes('<file path="Basic\\Module1.vb">'));
+		assert.ok(
+			result.skipped.some(
+				(s) =>
+					s.path === "Basic\\Module1.vb" &&
+					s.reason.includes(".gitignore により除外"),
+			),
+		);
+		assert.ok(result.content.includes("本家 repomix と同様"));
+	});
+
+	test("ignoreReasonFor 未指定なら従来どおり全ファイルを含める", () => {
+		const sources: RepomixSource[] = [{ label: "Basic", parseResult: parseBasic() }];
+		const result = buildRepomixOutput("Basic.vbproj", sources, fakeDeps, {
+			includeSensitive: false,
+			maskCredentials: false,
+		});
+		assert.ok(result.content.includes('<file path="Basic\\Module1.vb">'));
+		assert.ok(result.content.includes("exportRespectGitignore で無効化"));
+	});
+});
+
 suite("repomixExporter: 未解決項目の扱い", () => {
 	test("missing / 未解決式は内容なしでスキップ一覧と印付きツリーに載る", () => {
 		const projectPath = path.join(FIXTURES_ROOT, "edge-cases", "EdgeCases.vbproj");

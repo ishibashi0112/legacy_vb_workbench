@@ -28,6 +28,10 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
   ままの構成でパックできる。Shift_JIS のソースは UTF-8 へ自動変換。
   `.resx` は除外、Designer 関連は既定で除外(設定で変更可)、除外・未解決分は
   `<skipped_files>` に明記
+- **.gitignore の尊重** — `.gitignore` / `.repomixignore` に一致するファイルは
+  エクスポートから除外(本家 repomix と同じ既定挙動。`!` 否定・ネストにも対応。
+  除外分は `<skipped_files>` に根拠付きで明記。git 管理外プロジェクトでは
+  ignore ファイルが無いだけなので影響なし)
 - **認証情報の自動マスク** — エクスポート時に認証情報らしき値を `[MASKED]` に
   自動置換(既定で有効)。接続文字列(`Password=` / `PWD=` / `User ID=` 等)、
   秘密系変数への文字列リテラル代入、AWS/GitHub/Slack トークン・JWT・Bearer・
@@ -47,6 +51,7 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
 | `legacyVbWorkbench.msbuildOutputEncoding` | `auto` | MSBuild 出力のエンコーディング。auto は自動判定(MSBuild 12.0 = cp932、MSBuild 17/18 = utf8) |
 | `legacyVbWorkbench.exportIncludeDesignerFiles` | `false` | Repomix エクスポートに Designer 関連ファイルを含める |
 | `legacyVbWorkbench.exportMaskCredentials` | `true` | Repomix エクスポートで認証情報らしき値を `[MASKED]` に自動置換 |
+| `legacyVbWorkbench.exportRespectGitignore` | `true` | Repomix エクスポートで `.gitignore` / `.repomixignore` を尊重して除外 |
 
 ## インストール(.vsix)
 

@@ -213,6 +213,9 @@ importers:
       iconv-lite:
         specifier: ^0.7.3
         version: 0.7.3
+      ignore:
+        specifier: ^7.0.6
+        version: 7.0.6
     devDependencies:
       '@types/mocha':
         specifier: ^10.0.10

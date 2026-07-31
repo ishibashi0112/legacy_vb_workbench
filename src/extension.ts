@@ -20,6 +20,7 @@ import {
 	locateMsbuild,
 	type LocatorDeps,
 } from "./services/msbuildLocator";
+import { GitignoreEvaluator } from "./services/gitignoreService";
 import {
 	buildRepomixOutput,
 	decodeSourceBuffer,
@@ -483,6 +484,8 @@ async function exportRepomix(
 	const includeSensitive =
 		exportConfig.get<boolean>("exportIncludeDesignerFiles") ?? false;
 	const maskCredentials = exportConfig.get<boolean>("exportMaskCredentials") ?? true;
+	const respectGitignore =
+		exportConfig.get<boolean>("exportRespectGitignore") ?? true;
 
 	let sources: RepomixSource[];
 	if (/\.sln$/i.test(target)) {
@@ -520,10 +523,36 @@ async function exportRepomix(
 		return;
 	}
 
+	// .gitignore / .repomixignore の尊重(本家 repomix と同じ既定挙動)
+	const gitignore = new GitignoreEvaluator(
+		{
+			readTextFileIfExists: (absolutePath) => {
+				try {
+					return fs.readFileSync(absolutePath, "utf8");
+				} catch {
+					return undefined;
+				}
+			},
+			directoryExists: (absolutePath) => {
+				try {
+					return fs.statSync(absolutePath).isDirectory();
+				} catch {
+					return false;
+				}
+			},
+		},
+		path.dirname(target),
+	);
+
 	const output = buildRepomixOutput(
 		path.basename(target),
 		sources,
-		{ readTextFile: readSourceTextFile },
+		{
+			readTextFile: readSourceTextFile,
+			ignoreReasonFor: respectGitignore
+				? (absolutePath) => gitignore.ignoreReasonFor(absolutePath)
+				: undefined,
+		},
 		{ includeSensitive, maskCredentials },
 	);
 

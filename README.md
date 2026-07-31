@@ -22,6 +22,12 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
   出力は Output「Legacy VB Build」へストリーム表示、通知からキャンセル可
 - **Visual Studio で開く**(`Legacy VB: Open in Visual Studio`)— devenv.exe を
   検出して `.sln` / `.vbproj` を開く(デザイナー・デバッグへ戻る導線)
+- **AI 向けエクスポート**(`Legacy VB: Export for AI (Repomix)`)— `.sln` / `.vbproj`
+  の論理構成に基づき、全ソースを Repomix 形式の 1 ファイルにまとめて出力。
+  ソースが複数フォルダ・別ドライブに散らばっていても Visual Studio が見ている
+  ままの構成でパックできる。Shift_JIS のソースは UTF-8 へ自動変換。
+  `.resx` は除外、Designer 関連は既定で除外(設定で変更可)、除外・未解決分は
+  `<skipped_files>` に明記
 
 ビルド・VS 起動は **MSBuild / Visual Studio が存在する Windows 上の VS Code**
 (RDP 先の開発 PC)でのみ動作します。EXE 起動は今後のフェーズです。
@@ -34,6 +40,7 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
 | `legacyVbWorkbench.devenvPath` | (空) | devenv.exe のフルパス。空なら自動検出 |
 | `legacyVbWorkbench.buildConfiguration` | `Debug` | ビルドの Configuration |
 | `legacyVbWorkbench.msbuildOutputEncoding` | `cp932` | MSBuild 出力のエンコーディング(日本語 Windows は cp932) |
+| `legacyVbWorkbench.exportIncludeDesignerFiles` | `false` | Repomix エクスポートに Designer 関連ファイルを含める |
 
 ## インストール(.vsix)
 

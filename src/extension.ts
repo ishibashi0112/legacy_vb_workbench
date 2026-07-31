@@ -17,12 +17,18 @@ import {
 	locateMsbuild,
 	type LocatorDeps,
 } from "./services/msbuildLocator";
+import {
+	buildRepomixOutput,
+	decodeSourceBuffer,
+	type RepomixSource,
+} from "./services/repomixExporter";
 import { launchVisualStudio } from "./services/visualStudioLauncher";
 import { parseSln } from "./slnParser";
 import type {
 	FileNode,
 	ParseDiagnostic,
 	ProjectItemStatus,
+	SlnParseResult,
 	VbprojParseResult,
 } from "./types";
 import { parseVbproj } from "./vbprojParser";
@@ -141,6 +147,10 @@ export function activate(context: vscode.ExtensionContext): void {
 				void openInVisualStudio(resolveBuildTarget(node, context));
 			},
 		),
+
+		vscode.commands.registerCommand("legacyVbWorkbench.exportRepomix", (node: unknown) => {
+			void exportRepomix(context, node);
+		}),
 	);
 
 	// 起動時に前回の選択があれば自動で復元する
@@ -421,6 +431,105 @@ async function openInVisualStudio(targetPath: string | undefined): Promise<void>
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Repomix 形式エクスポート
+// ---------------------------------------------------------------------------
+
+/** ソースファイルを文字コード自動判定(BOM / UTF-8 / CP932)で読み込む */
+function readSourceTextFile(absolutePath: string): string | undefined {
+	try {
+		return decodeSourceBuffer(fs.readFileSync(absolutePath));
+	} catch {
+		return undefined;
+	}
+}
+
+/** 現在の選択(.sln / .vbproj)を Repomix 形式の 1 ファイルに出力する */
+async function exportRepomix(
+	context: vscode.ExtensionContext,
+	node: unknown,
+): Promise<void> {
+	const target = resolveBuildTarget(node, context);
+	if (target === undefined) {
+		void vscode.window.showWarningMessage(
+			"先に「Legacy VB: Select Solution」等で対象を選択してください。",
+		);
+		return;
+	}
+	const includeSensitive =
+		vscode.workspace
+			.getConfiguration("legacyVbWorkbench")
+			.get<boolean>("exportIncludeDesignerFiles") ?? false;
+
+	let sources: RepomixSource[];
+	if (/\.sln$/i.test(target)) {
+		const bundle = parseSolutionProjects(target);
+		if (bundle === undefined) {
+			return;
+		}
+		const resultByPath = new Map(
+			bundle.projectResults.map((result) => [
+				result.projectPath.toLowerCase(),
+				result,
+			]),
+		);
+		sources = [];
+		for (const project of bundle.slnResult.projects) {
+			const result = resultByPath.get(project.absolutePath.toLowerCase());
+			if (result !== undefined) {
+				sources.push({ label: project.name, parseResult: result });
+			}
+		}
+	} else {
+		const xml = tryReadFile(target);
+		if (xml === undefined) {
+			return;
+		}
+		sources = [
+			{
+				label: path.basename(target).replace(/\.vbproj$/i, ""),
+				parseResult: parseVbproj(xml, target, FS_DEPS),
+			},
+		];
+	}
+	if (sources.length === 0) {
+		void vscode.window.showWarningMessage("出力対象のプロジェクトがありません。");
+		return;
+	}
+
+	const output = buildRepomixOutput(
+		path.basename(target),
+		sources,
+		{ readTextFile: readSourceTextFile },
+		{ includeSensitive },
+	);
+
+	const saveUri = await vscode.window.showSaveDialog({
+		defaultUri: vscode.Uri.file(
+			path.join(path.dirname(target), "repomix-output.xml"),
+		),
+		filters: { "Repomix 出力": ["xml", "txt"] },
+	});
+	if (saveUri === undefined) {
+		return;
+	}
+	try {
+		fs.writeFileSync(saveUri.fsPath, output.content, "utf8");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		void vscode.window.showErrorMessage(`出力ファイルを書き込めません: ${message}`);
+		return;
+	}
+	const document = await vscode.workspace.openTextDocument(saveUri);
+	await vscode.window.showTextDocument(document, { preview: true });
+	void vscode.window.showInformationMessage(
+		`Repomix 形式で出力しました: ${output.fileCount} ファイル / 約 ${Math.max(
+			1,
+			Math.round(output.totalChars / 1000),
+		)}K 文字(スキップ ${output.skipped.length} 件)`,
+	);
+}
+
 interface RunOptions {
 	quiet?: boolean;
 }
@@ -463,16 +572,17 @@ function runParseVbproj(
 	);
 }
 
-/** .sln を解析し、含まれる全 .vbproj を読み込んでツリーを構築する */
-function runParseSolution(
-	solutionPath: string,
-	channel: vscode.OutputChannel,
-	provider: LegacyProjectTreeProvider,
-	options: RunOptions = {},
-): void {
+/** .sln と配下の全 .vbproj を解析する(ツリー表示とエクスポートで共用) */
+interface SolutionParseBundle {
+	slnResult: SlnParseResult;
+	projectResults: VbprojParseResult[];
+	readDiagnostics: ParseDiagnostic[];
+}
+
+function parseSolutionProjects(solutionPath: string): SolutionParseBundle | undefined {
 	const content = tryReadFile(solutionPath);
 	if (content === undefined) {
-		return;
+		return undefined;
 	}
 	const slnResult = parseSln(content, solutionPath, FS_DEPS);
 
@@ -493,6 +603,21 @@ function runParseSolution(
 			});
 		}
 	}
+	return { slnResult, projectResults, readDiagnostics };
+}
+
+/** .sln を解析し、含まれる全 .vbproj を読み込んでツリーを構築する */
+function runParseSolution(
+	solutionPath: string,
+	channel: vscode.OutputChannel,
+	provider: LegacyProjectTreeProvider,
+	options: RunOptions = {},
+): void {
+	const bundle = parseSolutionProjects(solutionPath);
+	if (bundle === undefined) {
+		return;
+	}
+	const { slnResult, projectResults, readDiagnostics } = bundle;
 
 	const tree = buildSolutionTree(slnResult, projectResults);
 	provider.setRoot(tree.root);

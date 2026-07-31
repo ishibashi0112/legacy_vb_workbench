@@ -1,5 +1,13 @@
 # Change Log
 
+## [0.2.0] - 2026-07-31
+
+- AI 向けエクスポート(`Legacy VB: Export for AI (Repomix)`)を追加
+  - .sln / .vbproj の論理構成(Link 解決済み)に基づき全ソースを 1 ファイルへ
+  - Shift_JIS / UTF-8 / UTF-16 を自動判定し UTF-8 へ統一
+  - .resx は除外、Designer 関連は既定で除外(設定 exportIncludeDesignerFiles)
+  - 除外・未解決ファイルは <skipped_files> セクションに理由付きで明記
+
 ## [0.1.0] - 2026-07-31
 
 - MSBuild ビルド実行(`Legacy VB: Build`)を追加

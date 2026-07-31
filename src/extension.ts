@@ -11,7 +11,10 @@ import * as vscode from "vscode";
 import { buildLogicalTree, buildSolutionTree } from "./logicalTreeBuilder";
 import { LegacyProjectDragController } from "./legacyProjectDragController";
 import { LegacyProjectTreeProvider } from "./legacyProjectTreeProvider";
-import { BuildService } from "./services/buildService";
+import {
+	type BuildOutputEncoding,
+	BuildService,
+} from "./services/buildService";
 import {
 	locateDevenv,
 	locateMsbuild,
@@ -377,7 +380,9 @@ async function runBuild(
 
 	const config = vscode.workspace.getConfiguration("legacyVbWorkbench");
 	const configuration = config.get<string>("buildConfiguration") ?? "Debug";
-	const encoding = config.get<string>("msbuildOutputEncoding") ?? "cp932";
+	const encodingRaw = config.get<string>("msbuildOutputEncoding");
+	const encoding: BuildOutputEncoding =
+		encodingRaw === "cp932" || encodingRaw === "utf8" ? encodingRaw : "auto";
 
 	buildChannel.show(true);
 	await vscode.window.withProgress(

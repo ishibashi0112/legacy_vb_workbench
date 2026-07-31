@@ -1,9 +1,14 @@
 # Change Log
 
-All notable changes to the "legacy-vb-net-workbench" extension will be documented in this file.
+## [0.0.2] - 2026-07-31
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+- ツリーのファイルを標準エクスプローラーと同じ挙動で開くように変更
+  (シングルクリック=プレビュータブ / ダブルクリック=タブ固定)
+- Designer 確認ダイアログ表示中のダブルクリックで二重にダイアログが出ないよう修正
 
-## [Unreleased]
+## [0.0.1] - 2026-07-31
 
-- Initial release
+- 初回リリース
+- `.sln` / 旧形式 `.vbproj` の静的解析と論理ツリー表示
+- `Link` / `DependentUpon` 対応、未解決項目の警告表示
+- Designer 関連ファイルを開く際の確認ダイアログ

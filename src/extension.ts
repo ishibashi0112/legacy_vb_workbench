@@ -134,8 +134,36 @@ function isFileNode(value: unknown): value is FileNode {
 	return record["type"] === "file" && typeof record["item"] === "object";
 }
 
+/**
+ * ダブルクリック検出用の状態。
+ * TreeView のクリックはコマンド発火のみでシングル/ダブルの区別がないため、
+ * 標準エクスプローラーと同様の「1回目=プレビュー / 2回目=タブ固定」を
+ * 同一ノードへの連続クリック時間で判定する。
+ */
+const DOUBLE_CLICK_THRESHOLD_MS = 500;
+let lastClick: { nodeId: string; time: number } | undefined;
+
+/** Designer 確認ダイアログ表示中のノード(ダブルクリックでの二重ダイアログ防止) */
+const pendingConfirms = new Map<string, { pin: boolean }>();
+
 /** Tree View からのクリックで物理ファイルを開く(Designer 関連は確認を挟む) */
 async function openProjectFile(node: FileNode): Promise<void> {
+	const now = Date.now();
+	const isDoubleClick =
+		lastClick !== undefined &&
+		lastClick.nodeId === node.id &&
+		now - lastClick.time < DOUBLE_CLICK_THRESHOLD_MS;
+	lastClick = { nodeId: node.id, time: now };
+
+	// 確認ダイアログ表示中に再クリックされた場合は、固定要求だけ引き継いで終了
+	const pending = pendingConfirms.get(node.id);
+	if (pending !== undefined) {
+		if (isDoubleClick) {
+			pending.pin = true;
+		}
+		return;
+	}
+
 	const item = node.item;
 	if (item.sourcePath === undefined) {
 		void vscode.window.showWarningMessage(
@@ -149,22 +177,32 @@ async function openProjectFile(node: FileNode): Promise<void> {
 		);
 		return;
 	}
+
+	let pin = isDoubleClick;
 	if (item.isSensitive) {
-		const choice = await vscode.window.showWarningMessage(
-			`「${node.label}」は Designer 関連ファイルです。`,
-			{
-				modal: true,
-				detail:
-					"Visual Studio が自動生成・管理するファイルのため、手動編集はフォームデザイナーの破損につながる可能性があります。開きますか?",
-			},
-			"開く",
-		);
+		const state = { pin };
+		pendingConfirms.set(node.id, state);
+		let choice: string | undefined;
+		try {
+			choice = await vscode.window.showWarningMessage(
+				`「${node.label}」は Designer 関連ファイルです。`,
+				{
+					modal: true,
+					detail:
+						"Visual Studio が自動生成・管理するファイルのため、手動編集はフォームデザイナーの破損につながる可能性があります。開きますか?",
+				},
+				"開く",
+			);
+		} finally {
+			pendingConfirms.delete(node.id);
+		}
 		if (choice !== "開く") {
 			return;
 		}
+		pin = state.pin;
 	}
 	await vscode.window.showTextDocument(vscode.Uri.file(item.sourcePath), {
-		preview: true,
+		preview: !pin,
 	});
 }
 

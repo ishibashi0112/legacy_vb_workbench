@@ -286,6 +286,23 @@ function queryRegistry(
 	});
 }
 
+/** vswhere.exe の既定の場所(VS2017 以降のインストーラーが必ずここに置く) */
+const VSWHERE_PATH =
+	"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
+
+/** vswhere.exe を実行して標準出力を返す(不在・失敗時 undefined) */
+function runVswhere(args: readonly string[]): Promise<string | undefined> {
+	return new Promise((resolve) => {
+		if (!fs.existsSync(VSWHERE_PATH)) {
+			resolve(undefined);
+			return;
+		}
+		execFile(VSWHERE_PATH, [...args], { windowsHide: true }, (error, stdout) => {
+			resolve(error !== null ? undefined : stdout);
+		});
+	});
+}
+
 function locatorDeps(configKey: "msbuildPath" | "devenvPath"): LocatorDeps {
 	const configured = vscode.workspace
 		.getConfiguration("legacyVbWorkbench")
@@ -295,6 +312,7 @@ function locatorDeps(configKey: "msbuildPath" | "devenvPath"): LocatorDeps {
 			configured === undefined || configured.trim() === "" ? undefined : configured,
 		fileExists: (absolutePath) => fs.existsSync(absolutePath),
 		queryRegistry,
+		runVswhere,
 	};
 }
 

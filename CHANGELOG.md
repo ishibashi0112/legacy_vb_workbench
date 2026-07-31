@@ -1,5 +1,12 @@
 # Change Log
 
+## [0.3.0] - 2026-07-31
+
+- MSBuild / devenv の検出に vswhere.exe を追加(VS2017 以降: 2022 / 2026 等)
+  - 検出順: 設定 → レジストリ(VS2013 = 12.0 を最優先)→ vswhere → 既知パス
+  - VS2022 移行後や VS2026 Community のみの環境でも自動検出が効くように
+- 既知パスに VS2022(Community/Professional/Enterprise)と VS2026 を追加
+
 ## [0.2.0] - 2026-07-31
 
 - AI 向けエクスポート(`Legacy VB: Export for AI (Repomix)`)を追加

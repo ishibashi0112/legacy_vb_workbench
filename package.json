@@ -2,7 +2,7 @@
   "name": "legacy-vb-net-workbench",
   "displayName": "Legacy VB.NET Workbench",
   "description": "レガシー VB.NET(VS2013 時代の .vbproj / .sln)の論理構造を VS Code で表示・編集しやすくする補助ツール",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "ishibashi0112",
   "repository": {
     "type": "git",

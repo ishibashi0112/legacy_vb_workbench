@@ -36,8 +36,8 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
 
 | 設定 | 既定値 | 説明 |
 | --- | --- | --- |
-| `legacyVbWorkbench.msbuildPath` | (空) | MSBuild.exe のフルパス。空なら自動検出(設定 → レジストリ → 既定パス) |
-| `legacyVbWorkbench.devenvPath` | (空) | devenv.exe のフルパス。空なら自動検出 |
+| `legacyVbWorkbench.msbuildPath` | (空) | MSBuild.exe のフルパス。空なら自動検出(設定 → レジストリ(VS2013)→ vswhere(VS2017 以降)→ 既定パス) |
+| `legacyVbWorkbench.devenvPath` | (空) | devenv.exe のフルパス。空なら自動検出(同上) |
 | `legacyVbWorkbench.buildConfiguration` | `Debug` | ビルドの Configuration |
 | `legacyVbWorkbench.msbuildOutputEncoding` | `cp932` | MSBuild 出力のエンコーディング(日本語 Windows は cp932) |
 | `legacyVbWorkbench.exportIncludeDesignerFiles` | `false` | Repomix エクスポートに Designer 関連ファイルを含める |

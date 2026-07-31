@@ -11,6 +11,7 @@ import {
 	locateDevenv,
 	locateMsbuild,
 	parseRegSzValue,
+	parseVswhereOutput,
 } from "../services/msbuildLocator";
 
 /** 実際の reg.exe query 出力を模したサンプル */
@@ -26,6 +27,7 @@ function makeDeps(overrides: Partial<LocatorDeps>): LocatorDeps {
 		configuredPath: undefined,
 		fileExists: () => false,
 		queryRegistry: () => Promise.resolve(undefined),
+		runVswhere: () => Promise.resolve(undefined),
 		...overrides,
 	};
 }
@@ -114,9 +116,57 @@ suite("msbuildLocator: locateMsbuild", () => {
 		assert.deepStrictEqual(result, { path: known, source: "既定パス" });
 	});
 
+	test("レジストリ(12.0)がなければ vswhere で VS2017 以降を検出する", async () => {
+		const exe =
+			"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe";
+		const deps = makeDeps({
+			fileExists: (p) => p === exe,
+			runVswhere: () => Promise.resolve(`${exe}\r\n`),
+		});
+		const result = await locateMsbuild(deps);
+		assert.deepStrictEqual(result, { path: exe, source: "vswhere" });
+	});
+
+	test("レジストリ(12.0 = VS2013)は vswhere より優先される", async () => {
+		const legacy = "C:\\Program Files (x86)\\MSBuild\\12.0\\bin\\MSBuild.exe";
+		const modern =
+			"C:\\Program Files\\Microsoft Visual Studio\\2026\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe";
+		const deps = makeDeps({
+			fileExists: (p) => p === legacy || p === modern,
+			queryRegistry: () => Promise.resolve(REG_OUTPUT_MSBUILD),
+			runVswhere: () => Promise.resolve(`${modern}\r\n`),
+		});
+		const result = await locateMsbuild(deps);
+		assert.deepStrictEqual(result, { path: legacy, source: "レジストリ" });
+	});
+
+	test("vswhere が返したパスが実在しなければ既知パスへ進む", async () => {
+		const known =
+			"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe";
+		const deps = makeDeps({
+			fileExists: (p) => p === known,
+			runVswhere: () => Promise.resolve("C:\\gone\\MSBuild.exe\r\n"),
+		});
+		const result = await locateMsbuild(deps);
+		assert.deepStrictEqual(result, { path: known, source: "既定パス" });
+	});
+
 	test("どの手段でも見つからなければ undefined", async () => {
 		const result = await locateMsbuild(makeDeps({}));
 		assert.strictEqual(result, undefined);
+	});
+});
+
+suite("msbuildLocator: parseVswhereOutput", () => {
+	test("先頭の非空行を取り出す(CRLF・空行対応)", () => {
+		assert.strictEqual(
+			parseVswhereOutput("\r\nC:\\VS\\MSBuild.exe\r\nC:\\Other\\MSBuild.exe\r\n"),
+			"C:\\VS\\MSBuild.exe",
+		);
+	});
+
+	test("空出力は undefined", () => {
+		assert.strictEqual(parseVswhereOutput("\r\n\r\n"), undefined);
 	});
 });
 
@@ -140,6 +190,17 @@ suite("msbuildLocator: locateDevenv", () => {
 		const deps = makeDeps({ fileExists: (p) => p === exe });
 		const result = await locateDevenv(deps);
 		assert.deepStrictEqual(result, { path: exe, source: "既定パス" });
+	});
+
+	test("vswhere の productPath から VS2026 等の devenv.exe を検出する", async () => {
+		const exe =
+			"C:\\Program Files\\Microsoft Visual Studio\\2026\\Community\\Common7\\IDE\\devenv.exe";
+		const deps = makeDeps({
+			fileExists: (p) => p === exe,
+			runVswhere: () => Promise.resolve(`${exe}\r\n`),
+		});
+		const result = await locateDevenv(deps);
+		assert.deepStrictEqual(result, { path: exe, source: "vswhere" });
 	});
 });
 

@@ -28,6 +28,11 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
   ままの構成でパックできる。Shift_JIS のソースは UTF-8 へ自動変換。
   `.resx` は除外、Designer 関連は既定で除外(設定で変更可)、除外・未解決分は
   `<skipped_files>` に明記
+- **認証情報の自動マスク** — エクスポート時に認証情報らしき値を `[MASKED]` に
+  自動置換(既定で有効)。接続文字列(`Password=` / `PWD=` / `User ID=` 等)、
+  秘密系変数への文字列リテラル代入、AWS/GitHub/Slack トークン・JWT・Bearer・
+  秘密鍵ブロックに対応。マスク箇所は `<masked_credentials>` に行番号付きで明記。
+  機械判定のため漏れはあり得ます — **共有前の目視確認は引き続き推奨**
 
 ビルド・VS 起動は **MSBuild / Visual Studio が存在する Windows 上の VS Code**
 (RDP 先の開発 PC)でのみ動作します。EXE 起動は今後のフェーズです。
@@ -41,6 +46,7 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
 | `legacyVbWorkbench.buildConfiguration` | `Debug` | ビルドの Configuration |
 | `legacyVbWorkbench.msbuildOutputEncoding` | `auto` | MSBuild 出力のエンコーディング。auto は自動判定(MSBuild 12.0 = cp932、MSBuild 17/18 = utf8) |
 | `legacyVbWorkbench.exportIncludeDesignerFiles` | `false` | Repomix エクスポートに Designer 関連ファイルを含める |
+| `legacyVbWorkbench.exportMaskCredentials` | `true` | Repomix エクスポートで認証情報らしき値を `[MASKED]` に自動置換 |
 
 ## インストール(.vsix)
 

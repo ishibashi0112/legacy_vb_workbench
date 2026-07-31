@@ -34,6 +34,7 @@ suite("repomixExporter: buildRepomixOutput", () => {
 	const sources: RepomixSource[] = [{ label: "Basic", parseResult: parseBasic() }];
 	const result = buildRepomixOutput("Basic.vbproj", sources, fakeDeps, {
 		includeSensitive: false,
+		maskCredentials: false,
 	});
 
 	test("Repomix 形式のセクション構造を持つ", () => {
@@ -86,6 +87,7 @@ suite("repomixExporter: buildRepomixOutput", () => {
 	test("includeSensitive で Designer 関連も含められる", () => {
 		const withSensitive = buildRepomixOutput("Basic.vbproj", sources, fakeDeps, {
 			includeSensitive: true,
+			maskCredentials: false,
 		});
 		assert.ok(
 			withSensitive.content.includes(
@@ -103,12 +105,53 @@ suite("repomixExporter: buildRepomixOutput", () => {
 			"Basic.vbproj",
 			sources,
 			{ readTextFile: () => undefined },
-			{ includeSensitive: false },
+			{ includeSensitive: false, maskCredentials: false },
 		);
 		assert.strictEqual(failing.fileCount, 0);
 		assert.ok(
 			failing.skipped.some((s) => s.reason.includes("読み込みに失敗")),
 		);
+	});
+});
+
+suite("repomixExporter: 認証情報マスク統合", () => {
+	test("マスク有効時は内容が置換され masked_credentials に記録される", () => {
+		const sources: RepomixSource[] = [{ label: "Basic", parseResult: parseBasic() }];
+		const secretDeps = {
+			readTextFile: (absolutePath: string): string | undefined =>
+				absolutePath.toLowerCase().endsWith(".vb")
+					? 'Public Pub_DB_Pswd As String = "inf001"'
+					: "Password=inf001;",
+		};
+		const result = buildRepomixOutput("Basic.vbproj", sources, secretDeps, {
+			includeSensitive: false,
+			maskCredentials: true,
+		});
+		assert.ok(!result.content.includes("inf001"));
+		assert.ok(result.content.includes('= "[MASKED]"'));
+		assert.ok(result.content.includes("<masked_credentials>"));
+		assert.ok(result.content.includes("パスワード"));
+		assert.ok(result.maskedCount > 0);
+		assert.ok(
+			result.maskedFiles.some((f) => f.path === "Basic\\Module1.vb"),
+		);
+	});
+
+	test("マスク無効時はそのまま出力され、無効であることが明記される", () => {
+		const sources: RepomixSource[] = [{ label: "Basic", parseResult: parseBasic() }];
+		const secretDeps = {
+			readTextFile: (absolutePath: string): string | undefined =>
+				absolutePath.toLowerCase().endsWith(".vb")
+					? 'Public Pub_DB_Pswd As String = "inf001"'
+					: "Password=inf001;",
+		};
+		const result = buildRepomixOutput("Basic.vbproj", sources, secretDeps, {
+			includeSensitive: false,
+			maskCredentials: false,
+		});
+		assert.ok(result.content.includes("inf001"));
+		assert.strictEqual(result.maskedCount, 0);
+		assert.ok(result.content.includes("マスク機能は設定で無効化"));
 	});
 });
 
@@ -124,7 +167,7 @@ suite("repomixExporter: 未解決項目の扱い", () => {
 			"EdgeCases.vbproj",
 			[{ label: "EdgeCases", parseResult }],
 			fakeDeps,
-			{ includeSensitive: false },
+			{ includeSensitive: false, maskCredentials: false },
 		);
 		assert.strictEqual(result.fileCount, 0);
 		assert.ok(result.content.includes("Missing.vb [ファイルなし]"));

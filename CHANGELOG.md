@@ -1,5 +1,16 @@
 # Change Log
 
+## [0.4.0] - 2026-08-01
+
+- Repomix エクスポートに認証情報の自動マスクを追加(既定で有効、設定
+  `exportMaskCredentials` で無効化可)
+  - 接続文字列キー(Password / PWD / Pswd / Secret / ApiKey / Token /
+    User ID / UID 等)の値
+  - 秘密系・ユーザー系変数名への VB 文字列リテラル代入
+  - AWS アクセスキー / GitHub・Slack トークン / JWT / Bearer / PRIVATE KEY ブロック
+  - 値が変数・式の場合は対象外(コードを壊さない)。SQL バインド変数(:UID 等)も対象外
+  - マスク箇所は <masked_credentials> セクションに行番号・種類付きで明記
+
 ## [0.3.2] - 2026-08-01
 
 - Repomix エクスポートの出力を BOM 付き UTF-8 に変更

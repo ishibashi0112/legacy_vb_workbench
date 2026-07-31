@@ -479,10 +479,10 @@ async function exportRepomix(
 		);
 		return;
 	}
+	const exportConfig = vscode.workspace.getConfiguration("legacyVbWorkbench");
 	const includeSensitive =
-		vscode.workspace
-			.getConfiguration("legacyVbWorkbench")
-			.get<boolean>("exportIncludeDesignerFiles") ?? false;
+		exportConfig.get<boolean>("exportIncludeDesignerFiles") ?? false;
+	const maskCredentials = exportConfig.get<boolean>("exportMaskCredentials") ?? true;
 
 	let sources: RepomixSource[];
 	if (/\.sln$/i.test(target)) {
@@ -524,7 +524,7 @@ async function exportRepomix(
 		path.basename(target),
 		sources,
 		{ readTextFile: readSourceTextFile },
-		{ includeSensitive },
+		{ includeSensitive, maskCredentials },
 	);
 
 	const saveUri = await vscode.window.showSaveDialog({
@@ -546,11 +546,14 @@ async function exportRepomix(
 	}
 	const document = await vscode.workspace.openTextDocument(saveUri);
 	await vscode.window.showTextDocument(document, { preview: true });
+	const maskNote = maskCredentials
+		? ` / 認証情報マスク ${output.maskedCount} 件`
+		: "(マスク無効)";
 	void vscode.window.showInformationMessage(
 		`Repomix 形式で出力しました: ${output.fileCount} ファイル / 約 ${Math.max(
 			1,
 			Math.round(output.totalChars / 1000),
-		)}K 文字(スキップ ${output.skipped.length} 件)`,
+		)}K 文字(スキップ ${output.skipped.length} 件${maskNote})`,
 	);
 }
 

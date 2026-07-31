@@ -14,6 +14,7 @@
 
 import * as iconv from "iconv-lite";
 import { buildLogicalTree } from "../logicalTreeBuilder";
+import { type MaskFinding, maskCredentials } from "./credentialMasker";
 import type { FileNode, LegacyTreeNode, VbprojParseResult } from "../types";
 
 export interface RepomixSource {
@@ -30,6 +31,8 @@ export interface RepomixExportDeps {
 export interface RepomixExportOptions {
 	/** Designer 関連(*.Designer.vb / *.resx 除く自動生成系)を含めるか */
 	includeSensitive: boolean;
+	/** 認証情報らしき値を [MASKED] に自動置換するか */
+	maskCredentials: boolean;
 }
 
 export interface SkippedFile {
@@ -37,11 +40,19 @@ export interface SkippedFile {
 	reason: string;
 }
 
+export interface MaskedFile {
+	path: string;
+	findings: MaskFinding[];
+}
+
 export interface RepomixExportResult {
 	content: string;
 	fileCount: number;
 	totalChars: number;
 	skipped: SkippedFile[];
+	/** マスクを行ったファイルと箇所の一覧 */
+	maskedFiles: MaskedFile[];
+	maskedCount: number;
 }
 
 /** 内容を含めないバイナリ系拡張子(小文字) */
@@ -183,6 +194,7 @@ export function buildRepomixOutput(
 	const treeLines: string[] = [];
 	const fileEntries: string[] = [];
 	const skipped: SkippedFile[] = [];
+	const maskedFiles: MaskedFile[] = [];
 	let fileCount = 0;
 	let totalChars = 0;
 
@@ -202,10 +214,20 @@ export function buildRepomixOutput(
 			}
 			// skipReason 通過時点で sourcePath は解決済み
 			const sourcePath = node.item.sourcePath as string;
-			const content = deps.readTextFile(sourcePath);
-			if (content === undefined) {
+			const rawContent = deps.readTextFile(sourcePath);
+			if (rawContent === undefined) {
 				skipped.push({ path: displayPath, reason: "読み込みに失敗しました" });
 				continue;
+			}
+			let content = rawContent;
+			if (options.maskCredentials) {
+				const masked = maskCredentials(rawContent, {
+					vbSource: /\.vb$/i.test(displayPath),
+				});
+				content = masked.content;
+				if (masked.findings.length > 0) {
+					maskedFiles.push({ path: displayPath, findings: masked.findings });
+				}
 			}
 			const conditionAttr =
 				node.item.condition === undefined
@@ -218,11 +240,28 @@ export function buildRepomixOutput(
 			totalChars += content.length;
 		}
 	}
+	const maskedCount = maskedFiles.reduce(
+		(sum, file) => sum + file.findings.length,
+		0,
+	);
 
 	const skippedSection =
 		skipped.length === 0
 			? "(なし)"
 			: skipped.map((s) => `- ${s.path}: ${s.reason}`).join("\n");
+
+	const maskedSection = !options.maskCredentials
+		? "(マスク機能は設定で無効化されています)"
+		: maskedFiles.length === 0
+			? "(検出なし)"
+			: maskedFiles
+					.map(
+						(file) =>
+							`- ${file.path}: ${file.findings
+								.map((f) => `L${f.line}(${f.kind})`)
+								.join(", ")}`,
+					)
+					.join("\n");
 
 	const content = [
 		`このファイルは Legacy VB.NET Workbench が「${title}」の論理構成(.sln / .vbproj)に基づき、ソースコードを 1 ファイルにまとめたものです(Repomix 形式)。`,
@@ -236,6 +275,9 @@ export function buildRepomixOutput(
 		"- 文字コードは UTF-8 に統一済み(元ファイルの Shift_JIS 等は自動変換)",
 		"- EmbeddedResource(.resx)は含まれない",
 		`- Designer 関連ファイルは${options.includeSensitive ? "含まれる" : "含まれない"}`,
+		options.maskCredentials
+			? "- 認証情報らしき値は [MASKED] に自動置換済み(<masked_credentials> を参照。機械判定のため漏れの可能性はあり、共有前に目視確認を推奨)"
+			: "- 認証情報の自動マスクは無効(ハードコードされた認証情報がそのまま含まれる可能性あり)",
 		"- 除外・未解決のファイルは <skipped_files> を参照",
 		"- このファイルは読み取り専用の成果物であり、編集しても元のプロジェクトには反映されない",
 		"</notes>",
@@ -253,7 +295,11 @@ export function buildRepomixOutput(
 		skippedSection,
 		"</skipped_files>",
 		"",
+		"<masked_credentials>",
+		maskedSection,
+		"</masked_credentials>",
+		"",
 	].join("\n");
 
-	return { content, fileCount, totalChars, skipped };
+	return { content, fileCount, totalChars, skipped, maskedFiles, maskedCount };
 }

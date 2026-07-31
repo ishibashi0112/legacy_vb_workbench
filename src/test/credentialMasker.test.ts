@@ -1,0 +1,159 @@
+/**
+ * credentialMasker の単体テスト。
+ * 実業務プロジェクト(NBOM040)で実際に検出された形を含む
+ * VB レガシーコードのパターンで検証する。
+ */
+
+import * as assert from "assert";
+import { maskCredentials } from "../services/credentialMasker";
+
+const VB = { vbSource: true };
+const GENERIC = { vbSource: false };
+
+suite("credentialMasker: VB 変数代入リテラル", () => {
+	test("パスワード系変数への代入をマスクする(実例由来)", () => {
+		const result = maskCredentials(
+			'Public Pub_KMSS_DB_Pswd As String = "inf001"',
+			VB,
+		);
+		assert.strictEqual(
+			result.content,
+			'Public Pub_KMSS_DB_Pswd As String = "[MASKED]"',
+		);
+		assert.strictEqual(result.findings[0].kind, "パスワード");
+	});
+
+	test("ユーザーID系変数への代入をマスクする(実例由来)", () => {
+		const result = maskCredentials('wk_Bics_User = "komori"', VB);
+		assert.strictEqual(result.content, 'wk_Bics_User = "[MASKED]"');
+		assert.strictEqual(result.findings[0].kind, "ユーザーID");
+	});
+
+	test("変数・式からの代入(リテラルでない)は触らない", () => {
+		const code = 'Pub_DB_Para_Nbom.DB_Pswd = wk_DbPara(1)';
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+
+	test("空文字リテラルは触らない", () => {
+		const code = 'Public Pub_LoginUserName As String = ""';
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+
+	test("認証と無関係な変数名は触らない", () => {
+		const code = [
+			'ComboBox_Unit.ValueMember = "UNIT_ID"',
+			'wk_Row("UNIT_ID") = ""',
+			'.ActiveSheet.Columns(0).Label = "ﾕﾆｯﾄｺｰﾄﾞ"',
+			'Pub_KMSS_DB_Conn As String = "KSIS01"',
+		].join("\n");
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+});
+
+suite("credentialMasker: VB 文字列リテラル内の接続文字列", () => {
+	test("PWD= / User ID= の値をマスクする(実例由来)", () => {
+		const code = [
+			'wk_ConStr = wk_ConStr & "Server=SSDB01;"',
+			'wk_ConStr = wk_ConStr & "User ID=sales_admin;"',
+			'wk_ConStr = wk_ConStr & "PWD=kss2015_Admin;"',
+			'wk_ConStr = wk_ConStr & "Initial Catalog=kss;"',
+		].join("\n");
+		const result = maskCredentials(code, VB);
+		assert.ok(result.content.includes('"User ID=[MASKED];"'));
+		assert.ok(result.content.includes('"PWD=[MASKED];"'));
+		// サーバー名・カタログ名は認証情報ではないため残す
+		assert.ok(result.content.includes('"Server=SSDB01;"'));
+		assert.ok(result.content.includes('"Initial Catalog=kss;"'));
+		assert.strictEqual(result.findings.length, 2);
+	});
+
+	test("値が変数連結(リテラル外)の場合は触らない", () => {
+		const code =
+			'wk_ConStr = wk_ConStr & "Password=" & In_Pswd & ";"';
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+
+	test("SQL のバインド変数(:NAME)や比較式は触らない", () => {
+		const code = [
+			'wk_Sql = wk_Sql & " Where UNIT_ID = :UNIT_ID"',
+			"'     TNTO = '\" & In_Tnto & \"'\"",
+		].join("\n");
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+});
+
+suite("credentialMasker: 非 VB ファイル(config / XML)", () => {
+	test("接続文字列属性の Password / User ID をマスクする", () => {
+		const xml =
+			'<add name="Db" connectionString="Data Source=SV1;User ID=sa;Password=p@ss w0rd;" />';
+		const result = maskCredentials(xml, GENERIC);
+		assert.ok(result.content.includes("User ID=[MASKED];"));
+		assert.ok(result.content.includes("Password=[MASKED];"));
+		assert.ok(result.content.includes("Data Source=SV1;"));
+	});
+
+	test('password="値" の属性形式をマスクする', () => {
+		const xml = '<credential username="admin" password="secret123" />';
+		const result = maskCredentials(xml, GENERIC);
+		assert.ok(result.content.includes('username="[MASKED]"'));
+		assert.ok(result.content.includes('password="[MASKED]"'));
+	});
+});
+
+suite("credentialMasker: 汎用シークレット形式", () => {
+	test("AWS アクセスキーをマスクする", () => {
+		const result = maskCredentials("key = AKIAIOSFODNN7EXAMPLE", GENERIC);
+		assert.ok(!result.content.includes("AKIAIOSFODNN7EXAMPLE"));
+		assert.ok(result.content.includes("[MASKED]"));
+	});
+
+	test("GitHub トークンをマスクする", () => {
+		const result = maskCredentials(
+			"url = https://ghp_abcdefghijklmnopqrstuvwxyz123456@github.com",
+			GENERIC,
+		);
+		assert.ok(!result.content.includes("ghp_abcdefghijk"));
+	});
+
+	test("Bearer トークンはトークン部のみマスクする", () => {
+		const result = maskCredentials(
+			"Authorization: Bearer abcdef1234567890TOKEN",
+			GENERIC,
+		);
+		assert.ok(/Bearer \[MASKED\]/.test(result.content));
+	});
+
+	test("PRIVATE KEY ブロックは BEGIN/END を残して中身をマスクする", () => {
+		const pem = [
+			"-----BEGIN RSA PRIVATE KEY-----",
+			"MIIEpAIBAAKCAQEA1234567890",
+			"abcdefghijklmnop",
+			"-----END RSA PRIVATE KEY-----",
+		].join("\n");
+		const result = maskCredentials(pem, GENERIC);
+		assert.ok(result.content.includes("-----BEGIN RSA PRIVATE KEY-----"));
+		assert.ok(result.content.includes("-----END RSA PRIVATE KEY-----"));
+		assert.ok(!result.content.includes("MIIEpAIBA"));
+		assert.strictEqual(result.findings[0].kind, "秘密鍵");
+	});
+
+	test("コメントアウトされた認証情報コードもマスクする(実例由来)", () => {
+		const code = [
+			"'Case \"3\"",
+			"'    wk_Bics_Pswd = \"komori\"",
+			"'    In_Label.Text = \"BICS 本番環境(ツバゴ)\"",
+		].join("\n");
+		const result = maskCredentials(code, VB);
+		assert.ok(!result.content.includes("komori"));
+		assert.ok(result.content.includes('wk_Bics_Pswd = "[MASKED]"'));
+		// 認証と無関係なコメント行は触らない
+		assert.ok(result.content.includes('In_Label.Text = "BICS 本番環境(ツバゴ)"'));
+	});
+
+	test("行番号が findings に記録される", () => {
+		const code = ['Dim a As String = "x"', 'wk_Pswd = "secret1"'].join("\n");
+		const result = maskCredentials(code, VB);
+		assert.strictEqual(result.findings.length, 1);
+		assert.strictEqual(result.findings[0].line, 2);
+	});
+});

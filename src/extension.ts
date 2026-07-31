@@ -4,11 +4,20 @@
  * 解析結果の JSON は引き続き Output Channel でも確認できる。
  */
 
+import { execFile } from "child_process";
 import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import { buildLogicalTree, buildSolutionTree } from "./logicalTreeBuilder";
 import { LegacyProjectDragController } from "./legacyProjectDragController";
 import { LegacyProjectTreeProvider } from "./legacyProjectTreeProvider";
+import { BuildService } from "./services/buildService";
+import {
+	locateDevenv,
+	locateMsbuild,
+	type LocatorDeps,
+} from "./services/msbuildLocator";
+import { launchVisualStudio } from "./services/visualStudioLauncher";
 import { parseSln } from "./slnParser";
 import type {
 	FileNode,
@@ -51,6 +60,9 @@ const FS_DEPS = {
 
 export function activate(context: vscode.ExtensionContext): void {
 	const channel = vscode.window.createOutputChannel("Legacy VB Workbench");
+	const buildChannel = vscode.window.createOutputChannel("Legacy VB Build");
+	const buildService = new BuildService(buildChannel);
+	context.subscriptions.push(buildChannel);
 	const provider = new LegacyProjectTreeProvider();
 	const treeView = vscode.window.createTreeView("legacyVbWorkbench.projects", {
 		treeDataProvider: provider,
@@ -118,6 +130,17 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 			void openProjectFile(node);
 		}),
+
+		vscode.commands.registerCommand("legacyVbWorkbench.buildSolution", (node: unknown) => {
+			void runBuild(buildService, buildChannel, resolveBuildTarget(node, context));
+		}),
+
+		vscode.commands.registerCommand(
+			"legacyVbWorkbench.openInVisualStudio",
+			(node: unknown) => {
+				void openInVisualStudio(resolveBuildTarget(node, context));
+			},
+		),
 	);
 
 	// 起動時に前回の選択があれば自動で復元する
@@ -208,6 +231,194 @@ async function openProjectFile(node: FileNode): Promise<void> {
 	await vscode.window.showTextDocument(vscode.Uri.file(item.sourcePath), {
 		preview: !pin,
 	});
+}
+
+// ---------------------------------------------------------------------------
+// MSBuild ビルド / Visual Studio 起動(handoff §19–20)
+// ---------------------------------------------------------------------------
+
+/**
+ * ビルド・VS 起動の対象パスを決める。
+ * コンテキストメニューから呼ばれた場合はそのノードの .sln / .vbproj、
+ * コマンドパレットからの場合は前回選択した対象を使う。
+ */
+function resolveBuildTarget(
+	node: unknown,
+	context: vscode.ExtensionContext,
+): string | undefined {
+	if (typeof node === "object" && node !== null) {
+		const record = node as Record<string, unknown>;
+		if (record["type"] === "solution" && typeof record["solutionPath"] === "string") {
+			return record["solutionPath"];
+		}
+		if (record["type"] === "project" && typeof record["projectPath"] === "string") {
+			return record["projectPath"];
+		}
+	}
+	const last = context.workspaceState.get<unknown>(LAST_SELECTION_KEY);
+	return isLastSelection(last) ? last.path : undefined;
+}
+
+/** reg.exe query を実行して標準出力を返す(失敗時 undefined) */
+function queryRegistry(
+	keyPath: string,
+	valueName: string,
+	view32: boolean,
+): Promise<string | undefined> {
+	return new Promise((resolve) => {
+		const args = ["query", keyPath, "/v", valueName];
+		if (view32) {
+			args.push("/reg:32");
+		}
+		execFile("reg", args, { windowsHide: true }, (error, stdout) => {
+			resolve(error !== null ? undefined : stdout);
+		});
+	});
+}
+
+function locatorDeps(configKey: "msbuildPath" | "devenvPath"): LocatorDeps {
+	const configured = vscode.workspace
+		.getConfiguration("legacyVbWorkbench")
+		.get<string>(configKey);
+	return {
+		configuredPath:
+			configured === undefined || configured.trim() === "" ? undefined : configured,
+		fileExists: (absolutePath) => fs.existsSync(absolutePath),
+		queryRegistry,
+	};
+}
+
+/** 自動検出に失敗したとき、手動選択させて設定に保存する */
+async function promptForExecutable(
+	displayName: string,
+	configKey: "msbuildPath" | "devenvPath",
+): Promise<string | undefined> {
+	const choice = await vscode.window.showErrorMessage(
+		`${displayName} が見つかりませんでした。場所を手動で選択できます。`,
+		"選択する...",
+	);
+	if (choice !== "選択する...") {
+		return undefined;
+	}
+	const picked = await vscode.window.showOpenDialog({
+		canSelectMany: false,
+		openLabel: `この ${displayName} を使用`,
+		filters: { "実行ファイル": ["exe"] },
+	});
+	const exePath = picked?.[0]?.fsPath;
+	if (exePath === undefined) {
+		return undefined;
+	}
+	// 次回以降の検出のためユーザー設定へ保存する
+	await vscode.workspace
+		.getConfiguration("legacyVbWorkbench")
+		.update(configKey, exePath, vscode.ConfigurationTarget.Global);
+	return exePath;
+}
+
+async function runBuild(
+	buildService: BuildService,
+	buildChannel: vscode.OutputChannel,
+	targetPath: string | undefined,
+): Promise<void> {
+	if (process.platform !== "win32") {
+		void vscode.window.showWarningMessage(
+			"MSBuild ビルドは Windows 環境でのみ実行できます。",
+		);
+		return;
+	}
+	if (targetPath === undefined) {
+		void vscode.window.showWarningMessage(
+			"先に「Legacy VB: Select Solution」等でビルド対象を選択してください。",
+		);
+		return;
+	}
+	if (buildService.isRunning) {
+		void vscode.window.showWarningMessage(
+			"ビルドが実行中です。完了を待つか、通知からキャンセルしてください。",
+		);
+		return;
+	}
+
+	const located = await locateMsbuild(locatorDeps("msbuildPath"));
+	const msbuildPath =
+		located?.path ?? (await promptForExecutable("MSBuild.exe", "msbuildPath"));
+	if (msbuildPath === undefined) {
+		return;
+	}
+
+	const config = vscode.workspace.getConfiguration("legacyVbWorkbench");
+	const configuration = config.get<string>("buildConfiguration") ?? "Debug";
+	const encoding = config.get<string>("msbuildOutputEncoding") ?? "cp932";
+
+	buildChannel.show(true);
+	await vscode.window.withProgress(
+		{
+			location: vscode.ProgressLocation.Notification,
+			title: `MSBuild ビルド中: ${path.basename(targetPath)}(${configuration})`,
+			cancellable: true,
+		},
+		async (_progress, token) => {
+			token.onCancellationRequested(() => buildService.cancel());
+			try {
+				const exitCode = await buildService.run(
+					msbuildPath,
+					targetPath,
+					configuration,
+					encoding,
+				);
+				if (token.isCancellationRequested || exitCode === null) {
+					void vscode.window.showWarningMessage("ビルドをキャンセルしました。");
+				} else if (exitCode === 0) {
+					void vscode.window.showInformationMessage(
+						`ビルド成功(${configuration})`,
+					);
+				} else {
+					void vscode.window.showErrorMessage(
+						`ビルド失敗(exit code: ${exitCode})。Output「Legacy VB Build」を確認してください。`,
+					);
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				void vscode.window.showErrorMessage(
+					`MSBuild を起動できませんでした: ${message}`,
+				);
+			}
+		},
+	);
+}
+
+async function openInVisualStudio(targetPath: string | undefined): Promise<void> {
+	if (process.platform !== "win32") {
+		void vscode.window.showWarningMessage(
+			"Visual Studio 起動は Windows 環境でのみ実行できます。",
+		);
+		return;
+	}
+	if (targetPath === undefined) {
+		void vscode.window.showWarningMessage(
+			"先に「Legacy VB: Select Solution」等で対象を選択してください。",
+		);
+		return;
+	}
+	const located = await locateDevenv(locatorDeps("devenvPath"));
+	const devenvPath =
+		located?.path ??
+		(await promptForExecutable("devenv.exe(Visual Studio 2013)", "devenvPath"));
+	if (devenvPath === undefined) {
+		return;
+	}
+	try {
+		launchVisualStudio(devenvPath, targetPath);
+		void vscode.window.showInformationMessage(
+			`Visual Studio で開いています: ${path.basename(targetPath)}`,
+		);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		void vscode.window.showErrorMessage(
+			`Visual Studio を起動できませんでした: ${message}`,
+		);
+	}
 }
 
 interface RunOptions {

@@ -17,8 +17,23 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
   - `Condition` 付き項目: `条件付き`(評価しません)
 - `Designer.vb` / `.resx` / 自動生成ファイルを開く際の警告ダイアログ
 - 手動更新(Refresh)と解析結果の JSON 出力(Output「Legacy VB Workbench」)
+- **MSBuild ビルド**(`Legacy VB: Build`)— MSBuild 12.0 等を自動検出し、
+  `/t:Build /p:Configuration=Debug /nologo` で実行(VS と同条件、`/m` なし)。
+  出力は Output「Legacy VB Build」へストリーム表示、通知からキャンセル可
+- **Visual Studio で開く**(`Legacy VB: Open in Visual Studio`)— devenv.exe を
+  検出して `.sln` / `.vbproj` を開く(デザイナー・デバッグへ戻る導線)
 
-MSBuild 実行・EXE 起動・Visual Studio 起動は今後のフェーズです。
+ビルド・VS 起動は **MSBuild / Visual Studio が存在する Windows 上の VS Code**
+(RDP 先の開発 PC)でのみ動作します。EXE 起動は今後のフェーズです。
+
+## 設定
+
+| 設定 | 既定値 | 説明 |
+| --- | --- | --- |
+| `legacyVbWorkbench.msbuildPath` | (空) | MSBuild.exe のフルパス。空なら自動検出(設定 → レジストリ → 既定パス) |
+| `legacyVbWorkbench.devenvPath` | (空) | devenv.exe のフルパス。空なら自動検出 |
+| `legacyVbWorkbench.buildConfiguration` | `Debug` | ビルドの Configuration |
+| `legacyVbWorkbench.msbuildOutputEncoding` | `cp932` | MSBuild 出力のエンコーディング(日本語 Windows は cp932) |
 
 ## インストール(.vsix)
 

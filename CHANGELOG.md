@@ -1,5 +1,15 @@
 # Change Log
 
+## [0.1.0] - 2026-07-31
+
+- MSBuild ビルド実行(`Legacy VB: Build`)を追加
+  - 検出順: 設定 → レジストリ(MSBuild 12.0)→ 既知パス → 手動選択(設定へ保存)
+  - VS と同条件(`/t:Build /p:Configuration=<設定値> /nologo`、`/m` なし)
+  - 出力は Output「Legacy VB Build」へストリーム(既定 cp932 デコード)
+  - 進行通知からキャンセル可(taskkill /t で子プロセスごと停止)
+- Visual Studio 起動(`Legacy VB: Open in Visual Studio`)を追加
+- ソリューション/プロジェクトノードの右クリックメニューに上記2コマンドを追加
+
 ## [0.0.3] - 2026-07-31
 
 - ツリーからエディター領域へのドラッグ&ドロップで開けるように対応

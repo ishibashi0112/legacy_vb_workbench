@@ -1,71 +1,52 @@
-# legacy-vb-net-workbench README
+# Legacy VB.NET Workbench for VS Code
 
-This is the README for your extension "legacy-vb-net-workbench". After writing up a brief description, we recommend including the following sections.
+Visual Studio 2013 時代のレガシー VB.NET WinForms プロジェクト(旧形式 `.vbproj` / `.sln`)を、**既存プロジェクトを一切変更せずに** VS Code で扱いやすくする補助ツールです。
 
-## Features
+Visual Studio を置き換えるものではありません。WinForms デザイナーや複雑なデバッグは Visual Studio に任せ、日常のコード編集・検索を VS Code 側で行うことを目的としています。
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+## 機能(現在のマイルストーン)
 
-For example if there is an image subfolder under your extension project workspace:
+- `.sln` / 旧形式 `.vbproj` を選択し、Visual Studio の Solution Explorer に近い**論理ツリー**を専用サイドバーに表示
+  - `Link` された外部ファイルは Link 先の論理パスに表示
+  - `DependentUpon` により `Designer.vb` / `.resx` をフォーム配下へ入れ子表示
+  - 物理配置が別ドライブ・別フォルダでもクリックで開ける
+- 静的 XML 解析の限界を隠さず表示
+  - 存在しないファイル: `ファイルなし`
+  - `$(...)` / `@(...)` / `%(...)`: `未解決式`(展開しません)
+  - ワイルドカード: `ワイルドカード未展開`
+  - `Condition` 付き項目: `条件付き`(評価しません)
+- `Designer.vb` / `.resx` / 自動生成ファイルを開く際の警告ダイアログ
+- 手動更新(Refresh)と解析結果の JSON 出力(Output「Legacy VB Workbench」)
 
-\!\[feature X\]\(images/feature-x.png\)
+MSBuild 実行・EXE 起動・Visual Studio 起動は今後のフェーズです。
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+## インストール(.vsix)
 
-## Requirements
+1. [releases/](releases/) から `.vsix` ファイルをダウンロード
+2. VS Code → 拡張機能ビュー右上の `…` → **「VSIX からのインストール...」** で選択
+   (またはコマンドパレット →「拡張機能: VSIX からのインストール」)
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+対応 VS Code バージョン: **1.75.0 以降**
 
-## Extension Settings
+## 使い方
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+1. アクティビティバーの **Legacy VB** アイコンを開く
+2. **Select Solution**(または Select VB Project)で `.sln` / `.vbproj` を選択
+3. ツリーからファイルをクリックして開く。前回の選択はウィンドウごとに記憶され、起動時に復元されます
 
-For example:
+## 制約(仕様)
 
-This extension contributes the following settings:
+- 静的 XML 解析のみで、MSBuild 評価は行いません(`Import` 先・`Choose`・プロパティ展開は未対応)
+- `.sln` は `Project` 行の抽出のみ。Solution Folder のネスト(`NestedProjects`)は未対応でフラット表示
+- 評価できない項目は推測せず、警告付きでそのまま表示します
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+## 開発
 
-## Known Issues
+```bash
+pnpm install
+pnpm run compile   # 型チェック + lint + esbuild
+pnpm test          # 単体テスト(vscode-test)
+pnpm run package:vsix  # releases/ に .vsix を生成
+```
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+構成や設計判断は [docs/legacy_vb_workbench_handoff.md](docs/legacy_vb_workbench_handoff.md) と [CLAUDE.md](CLAUDE.md) を参照してください。

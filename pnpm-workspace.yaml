@@ -1,2 +1,7 @@
+# ビルドスクリプトの許可設定
+# @vscode/vsce-sign / keytar は marketplace 公開・署名用のため .vsix 作成には不要
+# esbuild は optionalDependencies でバイナリ取得するためビルドスクリプト不要
 allowBuilds:
+  '@vscode/vsce-sign': false
   esbuild: false
+  keytar: false

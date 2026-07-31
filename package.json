@@ -1,17 +1,15 @@
 {
   "name": "legacy-vb-net-workbench",
   "displayName": "Legacy VB.NET Workbench",
-  "description": "",
+  "description": "レガシー VB.NET(VS2013 時代の .vbproj / .sln)の論理構造を VS Code で表示・編集しやすくする補助ツール",
   "version": "0.0.1",
-  "engines": {
-    "vscode": "^1.125.0"
+  "publisher": "ishibashi0112",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ishibashi0112/legacy_vb_workbench.git"
   },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "11.18.0",
-      "onFail": "download"
-    }
+  "engines": {
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Other"
@@ -101,14 +99,16 @@
     "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "package:vsix": "vsce package --no-dependencies --skip-license -o releases/"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
-    "@types/vscode": "^1.125.0",
+    "@types/vscode": "1.75.0",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
     "eslint": "^10.5.0",
     "npm-run-all": "^4.1.5",

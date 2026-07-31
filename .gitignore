@@ -3,3 +3,7 @@ dist
 node_modules
 .vscode-test/
 *.vsix
+# 配布用の .vsix はリポジトリに含める(社給PCへの持ち込み用)
+!releases/*.vsix
+# Claude Code のローカル設定
+.claude/settings.local.json

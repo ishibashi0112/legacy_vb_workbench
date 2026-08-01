@@ -157,3 +157,55 @@ suite("credentialMasker: 汎用シークレット形式", () => {
 		assert.strictEqual(result.findings[0].line, 2);
 	});
 });
+
+suite("credentialMasker: 日本語識別子・日本語キー", () => {
+	test("日本語の秘密系変数への代入をマスクする", () => {
+		const result = maskCredentials('パスワード = "himitsu123"', VB);
+		assert.strictEqual(result.content, 'パスワード = "[MASKED]"');
+		assert.strictEqual(result.findings[0].kind, "パスワード");
+	});
+
+	test("複合語の日本語変数(接続パスワード等)もマスクする", () => {
+		const result = maskCredentials(
+			'Public 接続パスワード As String = "abc"',
+			VB,
+		);
+		assert.strictEqual(
+			result.content,
+			'Public 接続パスワード As String = "[MASKED]"',
+		);
+	});
+
+	test("日本語のユーザー系変数への代入をマスクする", () => {
+		const result = maskCredentials('ログインユーザ名 = "yamada"', VB);
+		assert.strictEqual(result.content, 'ログインユーザ名 = "[MASKED]"');
+		assert.strictEqual(result.findings[0].kind, "ユーザーID");
+	});
+
+	test("リテラル内の日本語キー=値をマスクする(半角カナ含む)", () => {
+		const result = maskCredentials(
+			'wk = "ﾊﾟｽﾜｰﾄﾞ=abc123;ユーザーID=yamada;"',
+			VB,
+		);
+		assert.ok(result.content.includes("ﾊﾟｽﾜｰﾄﾞ=[MASKED];"));
+		assert.ok(result.content.includes("ユーザーID=[MASKED];"));
+	});
+
+	test("設定ファイルの日本語キー(全角=・属性形式)をマスクする", () => {
+		const text = ['パスワード=abc123', '<設定 パスワード="p@ss" />'].join("\n");
+		const result = maskCredentials(text, GENERIC);
+		assert.ok(!result.content.includes("abc123"));
+		assert.ok(!result.content.includes("p@ss"));
+		assert.ok(result.content.includes('パスワード="[MASKED]"'));
+	});
+
+	test("UI 文言(=を伴わない日本語)は触らない", () => {
+		const code = [
+			'Label1.Text = "パスワードを入力してください"',
+			'Msg = "ユーザー名または暗証番号が違います"',
+			'Title.Text = "パスワード: 8文字以上"',
+		].join("\n");
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+});
+

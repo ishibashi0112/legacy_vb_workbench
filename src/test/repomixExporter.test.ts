@@ -286,6 +286,36 @@ suite("repomixExporter: ui_summary(Designer 要約)", () => {
 		assert.ok(!result.content.includes("<ui_summary path="));
 	});
 
+	test("要約前の Designer ソースにもマスクが適用される", () => {
+		const designerWithSecret = [
+			"Partial Class LoginForm",
+			"    Friend WithEvents txtPassword As System.Windows.Forms.TextBox",
+			"    Private Sub InitializeComponent()",
+			'        Me.txtPassword.Text = "admin123"',
+			"        Me.Controls.Add(Me.txtPassword)",
+			'        Me.Text = "ログイン"',
+			"    End Sub",
+			"End Class",
+		].join("\n");
+		const result = buildRepomixOutput(
+			"Basic.vbproj",
+			sources,
+			{
+				readTextFile: (absolutePath) =>
+					/\.designer\.vb$/i.test(absolutePath)
+						? designerWithSecret
+						: fakeDeps.readTextFile(absolutePath),
+			},
+			{ includeSensitive: false, maskCredentials: true },
+		);
+		assert.ok(result.uiSummaryCount >= 1);
+		assert.ok(!result.content.includes("admin123"));
+		assert.ok(result.content.includes('Text "[MASKED]"'));
+		assert.ok(
+			result.maskedFiles.some((f) => f.path.includes("<ui_summary>")),
+		);
+	});
+
 	test("コントロールを抽出できない Designer.vb は通常スキップ扱い", () => {
 		const result = buildRepomixOutput("Basic.vbproj", sources, fakeDeps, {
 			includeSensitive: false,

@@ -36,12 +36,21 @@ const KIND_USER = "ユーザーID";
 const KIND_TOKEN = "APIキー/トークン";
 const KIND_PRIVATE_KEY = "秘密鍵";
 
-/** パスワード・秘密系とみなす変数名/キー名のヒント */
+/** パスワード・秘密系とみなす変数名/キー名のヒント(日本語識別子対応) */
 const SECRET_NAME_HINT =
-	/pass(?:word)?|passwd|pswd|pwd|secret|credential|api[_-]?key|apikey|access[_-]?key|accesskey|secret[_-]?key|secretkey|token/i;
+	/pass(?:word)?|passwd|pswd|pwd|secret|credential|api[_-]?key|apikey|access[_-]?key|accesskey|secret[_-]?key|secretkey|token|パスワード|ﾊﾟｽﾜｰﾄﾞ|暗証/i;
 
 /** ユーザーID系とみなす変数名のヒント(VB の代入リテラル用) */
-const USER_NAME_HINT = /user|uid|account|login/i;
+const USER_NAME_HINT = /user|uid|account|login|ユーザ|ﾕｰｻﾞ|アカウント/i;
+
+/**
+ * VB 識別子の文字クラス(日本語識別子対応)。
+ * ひらがな・カタカナ・CJK 漢字・半角カナ・全角英数を含める。
+ * `.` は Me.txtPassword.Text のようなメンバーアクセス用(先頭以外)
+ */
+const IDENT_HEAD =
+	"A-Za-z_\\u3040-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\uFF66-\\uFF9F\\uFF21-\\uFF3A\\uFF41-\\uFF5A";
+const IDENT_BODY = `${IDENT_HEAD}0-9.\\uFF10-\\uFF19`;
 
 /**
  * 接続文字列・設定のキー=値(パスワード系)。
@@ -55,19 +64,38 @@ const CONNSTR_SECRET =
 const CONNSTR_USER =
 	/\b(user\s*id|userid|username|uid)(\s*=\s*)([^;"&<>\r\n:][^;"&<>\r\n]*)/gi;
 
+/**
+ * 日本語キー=値(設定ファイル・接続文字列・リテラル内)。
+ * `\b` は非 ASCII に効かないため ASCII キーとは別パターンにする。
+ * `=` のほか全角 `=` も対象。`:` は UI ラベル文言("パスワード: 8文字以上"等)
+ * との誤爆が多いため対象外
+ */
+const JP_KEY_SECRET =
+	/(パスワード|ﾊﾟｽﾜｰﾄﾞ|暗証番号)(\s*[==]\s*)([^;"&<>\r\n\s][^;"&<>\r\n]*)/g;
+const JP_KEY_USER =
+	/(ユーザー?(?:ID|ID|名)|ﾕｰｻﾞｰ?ID|アカウント(?:ID|ID|名)?)(\s*[==]\s*)([^;"&<>\r\n\s][^;"&<>\r\n]*)/g;
+
 /** XML 属性形式: password="..." など(非 VB ファイル用) */
 const ATTR_SECRET =
 	/\b(password|passwd|pswd|pwd|pass|secret|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|token|user\s*id|userid|username|uid)(\s*=\s*")([^"]+)(")/gi;
+
+/** XML 属性形式の日本語キー: パスワード="..." など(非 VB ファイル用) */
+const JP_ATTR_SECRET =
+	/(パスワード|ﾊﾟｽﾜｰﾄﾞ|暗証番号|ユーザー?(?:ID|ID|名)|ﾕｰｻﾞｰ?ID)(\s*[==]\s*")([^"]+)(")/g;
 
 /**
  * 直前のコードが「変数 = 」で終わっているか(行継続 `_` 対応)。
  * 文字列リテラルの直前コンテキスト判定に使う
  */
-const ASSIGNMENT_TAIL =
-	/([A-Za-z_][A-Za-z0-9_.]*)\s*(?:As\s+String\s*)?=\s*(?:_\s*)?$/;
+const ASSIGNMENT_TAIL = new RegExp(
+	`([${IDENT_HEAD}][${IDENT_BODY}]*)\\s*(?:As\\s+String\\s*)?=\\s*(?:_\\s*)?$`,
+);
 
 /** コメント内のコメントアウトされた代入('wk_Pswd = "x" など) */
-const COMMENT_ASSIGN = /([A-Za-z_][A-Za-z0-9_.]*)(\s*=\s*")([^"\r\n]+)(")/g;
+const COMMENT_ASSIGN = new RegExp(
+	`([${IDENT_HEAD}][${IDENT_BODY}]*)(\\s*=\\s*")([^"\\r\\n]+)(")`,
+	"g",
+);
 
 /** 汎用シークレット形式(ファイル種別によらず適用) */
 const TOKEN_PATTERNS: ReadonlyArray<{ kind: string; regex: RegExp }> = [
@@ -112,6 +140,20 @@ function maskConnstrText(
 	);
 	result = result.replace(
 		CONNSTR_USER,
+		(whole, key: string, eq: string, _value: string, offset: number) => {
+			findings.push({ line: toLine(offset), kind: KIND_USER });
+			return `${key}${eq}${MASK}`;
+		},
+	);
+	result = result.replace(
+		JP_KEY_SECRET,
+		(whole, key: string, eq: string, _value: string, offset: number) => {
+			findings.push({ line: toLine(offset), kind: KIND_PASSWORD });
+			return `${key}${eq}${MASK}`;
+		},
+	);
+	result = result.replace(
+		JP_KEY_USER,
 		(whole, key: string, eq: string, _value: string, offset: number) => {
 			findings.push({ line: toLine(offset), kind: KIND_USER });
 			return `${key}${eq}${MASK}`;
@@ -236,6 +278,14 @@ function maskGenericText(content: string, findings: MaskFinding[]): string {
 		(whole, key: string, eq: string, _value: string, closeQuote: string, offset: number) => {
 			const kind = /user|uid/i.test(key) ? KIND_USER : KIND_PASSWORD;
 			findings.push({ line: lineOf(content, offset), kind });
+			return `${key}${eq}${MASK}${closeQuote}`;
+		},
+	);
+	result = result.replace(
+		JP_ATTR_SECRET,
+		(whole, key: string, eq: string, _value: string, closeQuote: string, offset: number) => {
+			const kind = /ユーザ|ﾕｰｻﾞ/.test(key) ? KIND_USER : KIND_PASSWORD;
+			findings.push({ line: lineOf(result, offset), kind });
 			return `${key}${eq}${MASK}${closeQuote}`;
 		},
 	);

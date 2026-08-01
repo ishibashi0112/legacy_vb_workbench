@@ -202,12 +202,15 @@ function escapeAttribute(value: string): string {
  * 除外した *.Designer.vb から <ui_summary> エントリを生成する。
  * 対象外・読めない・コントロールが取れない場合は undefined
  * (呼び出し側は通常のスキップ扱いにする)。
+ * maskEnabled 時は要約前の Designer ソースにマスクを適用する
+ * (Text 初期値に認証情報が書かれている場合の漏れを防ぐ)。
  */
 function buildUiSummaryEntry(
 	node: FileNode,
 	displayPath: string,
 	deps: RepomixExportDeps,
-): string | undefined {
+	maskEnabled: boolean,
+): { entry: string; findings: MaskFinding[] } | undefined {
 	const item = node.item;
 	if (
 		!item.isSensitive ||
@@ -220,9 +223,15 @@ function buildUiSummaryEntry(
 	if (deps.ignoreReasonFor?.(item.sourcePath) !== undefined) {
 		return undefined; // .gitignore 対象は要約もしない
 	}
-	const source = deps.readTextFile(item.sourcePath);
+	let source = deps.readTextFile(item.sourcePath);
 	if (source === undefined) {
 		return undefined;
+	}
+	let findings: MaskFinding[] = [];
+	if (maskEnabled) {
+		const masked = maskCredentials(source, { vbSource: true });
+		source = masked.content;
+		findings = masked.findings;
 	}
 	const summary = parseDesignerVb(source);
 	if (summary.controlCount === 0) {
@@ -240,7 +249,7 @@ function buildUiSummaryEntry(
 	}
 	lines.push(...renderDesignerControlLines(summary.rootControls));
 	lines.push("</ui_summary>");
-	return lines.join("\n");
+	return { entry: lines.join("\n"), findings };
 }
 
 /**
@@ -275,12 +284,18 @@ export function buildRepomixOutput(
 			const reason = skipReason(node, options);
 			if (reason !== undefined) {
 				const uiSummaryEntry = uiSummaryEnabled
-					? buildUiSummaryEntry(node, displayPath, deps)
+					? buildUiSummaryEntry(node, displayPath, deps, options.maskCredentials)
 					: undefined;
 				if (uiSummaryEntry !== undefined) {
-					fileEntries.push(uiSummaryEntry);
-					totalChars += uiSummaryEntry.length;
+					fileEntries.push(uiSummaryEntry.entry);
+					totalChars += uiSummaryEntry.entry.length;
 					uiSummaryCount += 1;
+					if (uiSummaryEntry.findings.length > 0) {
+						maskedFiles.push({
+							path: `${displayPath}(<ui_summary> 生成前の原文)`,
+							findings: uiSummaryEntry.findings,
+						});
+					}
 					skipped.push({
 						path: displayPath,
 						reason: "Designer 関連(<ui_summary> に要約済み)",
@@ -356,6 +371,7 @@ export function buildRepomixOutput(
 		"<purpose>",
 		"AI にコードベース全体を渡すためのパック済み表現。",
 		"パスは物理配置ではなく Visual Studio の論理構成(Link 解決済み)に基づく。",
+		"AI がコードを理解し質問に回答するための入力であり、このままコンパイル・実行できる形であることは保証しない。",
 		"</purpose>",
 		"<notes>",
 		"- 文字コードは UTF-8 に統一済み(元ファイルの Shift_JIS 等は自動変換)",
@@ -366,7 +382,7 @@ export function buildRepomixOutput(
 				? "- Designer 関連ファイルの原文は含まれない(フォームのコントロール構成のみ <ui_summary> として要約)"
 				: "- Designer 関連ファイルは含まれない",
 		options.maskCredentials
-			? "- 認証情報らしき値は [MASKED] に自動置換済み(<masked_credentials> を参照。機械判定のため漏れの可能性はあり、共有前に目視確認を推奨)"
+			? "- 認証情報らしき値は [MASKED] に自動置換済み。[MASKED] は伏せ字であり、元のソースには実際の値が存在する(<masked_credentials> を参照。機械判定のため漏れの可能性はあり、共有前に目視確認を推奨)"
 			: "- 認証情報の自動マスクは無効(ハードコードされた認証情報がそのまま含まれる可能性あり)",
 		deps.ignoreReasonFor !== undefined
 			? "- .gitignore / .repomixignore に一致するファイルは除外済み(本家 repomix と同様)"

@@ -494,6 +494,7 @@ async function exportRepomix(
 	const includeSensitive =
 		exportConfig.get<boolean>("exportIncludeDesignerFiles") ?? false;
 	const maskCredentials = exportConfig.get<boolean>("exportMaskCredentials") ?? true;
+	const strictMask = exportConfig.get<boolean>("exportStrictMask") ?? true;
 	const respectGitignore =
 		exportConfig.get<boolean>("exportRespectGitignore") ?? true;
 	const uiSummary = exportConfig.get<boolean>("exportUiSummary") ?? true;
@@ -564,7 +565,7 @@ async function exportRepomix(
 				? (absolutePath) => gitignore.ignoreReasonFor(absolutePath)
 				: undefined,
 		},
-		{ includeSensitive, maskCredentials, uiSummary },
+		{ includeSensitive, maskCredentials, strictMask, uiSummary },
 	);
 
 	const saveUri = await vscode.window.showSaveDialog({

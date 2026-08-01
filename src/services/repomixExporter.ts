@@ -43,6 +43,12 @@ export interface RepomixExportOptions {
 	/** 認証情報らしき値を [MASKED] に自動置換するか */
 	maskCredentials: boolean;
 	/**
+	 * 高エントロピー文字列(ランダムな英数字列)も機械的にマスクするか。
+	 * 省略時は true(厳格モードが既定)。maskCredentials が false のときは
+	 * 使われない
+	 */
+	strictMask?: boolean;
+	/**
 	 * Designer 原文を含めない場合に、*.Designer.vb からコントロール構成を
 	 * 要約した <ui_summary> を埋め込むか(既定 true)。
 	 * includeSensitive が true のとき(原文が含まれるとき)は使われない
@@ -210,6 +216,7 @@ function buildUiSummaryEntry(
 	displayPath: string,
 	deps: RepomixExportDeps,
 	maskEnabled: boolean,
+	strictMask: boolean,
 ): { entry: string; findings: MaskFinding[] } | undefined {
 	const item = node.item;
 	if (
@@ -229,7 +236,10 @@ function buildUiSummaryEntry(
 	}
 	let findings: MaskFinding[] = [];
 	if (maskEnabled) {
-		const masked = maskCredentials(source, { vbSource: true });
+		const masked = maskCredentials(source, {
+			vbSource: true,
+			strict: strictMask,
+		});
 		source = masked.content;
 		findings = masked.findings;
 	}
@@ -271,6 +281,7 @@ export function buildRepomixOutput(
 	let uiSummaryCount = 0;
 	const uiSummaryEnabled =
 		(options.uiSummary ?? true) && !options.includeSensitive;
+	const strictMask = options.strictMask ?? true;
 
 	for (const source of sources) {
 		const tree = buildLogicalTree(source.parseResult);
@@ -284,7 +295,13 @@ export function buildRepomixOutput(
 			const reason = skipReason(node, options);
 			if (reason !== undefined) {
 				const uiSummaryEntry = uiSummaryEnabled
-					? buildUiSummaryEntry(node, displayPath, deps, options.maskCredentials)
+					? buildUiSummaryEntry(
+						node,
+						displayPath,
+						deps,
+						options.maskCredentials,
+						strictMask,
+					)
 					: undefined;
 				if (uiSummaryEntry !== undefined) {
 					fileEntries.push(uiSummaryEntry.entry);
@@ -324,6 +341,7 @@ export function buildRepomixOutput(
 			if (options.maskCredentials) {
 				const masked = maskCredentials(rawContent, {
 					vbSource: /\.vb$/i.test(displayPath),
+					strict: strictMask,
 				});
 				content = masked.content;
 				if (masked.findings.length > 0) {
@@ -384,6 +402,16 @@ export function buildRepomixOutput(
 		options.maskCredentials
 			? "- 認証情報らしき値は [MASKED] に自動置換済み。[MASKED] は伏せ字であり、元のソースには実際の値が存在する(<masked_credentials> を参照。機械判定のため漏れの可能性はあり、共有前に目視確認を推奨)"
 			: "- 認証情報の自動マスクは無効(ハードコードされた認証情報がそのまま含まれる可能性あり)",
+		...(options.maskCredentials && strictMask
+			? [
+					"- 厳格モード: ランダムな英数字列(高エントロピー値)も機械的にマスクしている。秘密でない値が [MASKED] になっている可能性もあるが、コードの構造・ロジックの理解には影響しない",
+				]
+			: []),
+		...(options.maskCredentials
+			? [
+					"- AI への指示: [MASKED] の実際の値を尋ねられた場合は、マスクされているため回答できない旨を伝えること。[MASKED] を実際の値・バグ・空文字と解釈しないこと",
+				]
+			: []),
 		deps.ignoreReasonFor !== undefined
 			? "- .gitignore / .repomixignore に一致するファイルは除外済み(本家 repomix と同様)"
 			: "- .gitignore は考慮していない(設定 exportRespectGitignore で無効化されている)",

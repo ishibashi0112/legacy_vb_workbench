@@ -209,3 +209,86 @@ suite("credentialMasker: 日本語識別子・日本語キー", () => {
 	});
 });
 
+suite("credentialMasker: メソッド引数", () => {
+	test("秘密系メソッドの引数リテラルをマスクする", () => {
+		const result = maskCredentials('Login("admin", "pass123")', VB);
+		assert.strictEqual(result.content, 'Login("[MASKED]", "[MASKED]")');
+		assert.strictEqual(result.findings.length, 2);
+	});
+
+	test("名前付き引数(password:=)をマスクする", () => {
+		const result = maskCredentials(
+			'Connect(server, password:="secret1", timeout:=30)',
+			VB,
+		);
+		assert.strictEqual(
+			result.content,
+			'Connect(server, password:="[MASKED]", timeout:=30)',
+		);
+	});
+
+	test("メンバー経由の呼び出し(auth.SetPassword)もマスクする", () => {
+		const result = maskCredentials('auth.SetPassword("abc")', VB);
+		assert.strictEqual(result.content, 'auth.SetPassword("[MASKED]")');
+	});
+
+	test("無関係なメソッドの引数は触らない", () => {
+		const code = [
+			'MsgBox("パスワードを入力")',
+			'wk_Row("UNIT_ID") = ""',
+			'Format(dt, "yyyy/MM/dd")',
+		].join("\n");
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+
+	test("閉じた括弧の後(引数外)は触らない", () => {
+		const code = '.Columns(0).Label = "ﾕﾆｯﾄｺｰﾄﾞ"';
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+});
+
+suite("credentialMasker: 高エントロピー値(厳格モード)", () => {
+	test("リテラル内のランダム英数字列を既定でマスクする", () => {
+		const result = maskCredentials(
+			'Dim k As String = "x9Kp2mQ7vR4tW8nZ3cJ6bL1s"',
+			VB,
+		);
+		assert.ok(!result.content.includes("x9Kp2mQ7"));
+		assert.strictEqual(result.findings[0].kind, "高エントロピー値");
+	});
+
+	test("設定ファイル内の base64 らしき値もマスクする", () => {
+		const result = maskCredentials(
+			"<value>QWxhZGRpbjra29wZW4gc2Vz4W1l</value>",
+			GENERIC,
+		);
+		assert.ok(!result.content.includes("QWxhZGRpb"));
+	});
+
+	test("GUID・普通の語・日本語文はマスクしない", () => {
+		const code = [
+			'Dim g As String = "{8A5B1234-C81C-45F6-A57F-5ABD9991F28F}"',
+			'Dim s As String = "Windows10Update2026Info"',
+			'Dim path As String = "C:\\Program Files\\MyApp2026\\bin"',
+		].join("\n");
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+
+	test("識別子・コード構造は触らない(リテラル外は対象外)", () => {
+		const code = "Dim wk_NBOM_2026_TotalCount1x9K As Integer = 0";
+		assert.strictEqual(maskCredentials(code, VB).content, code);
+	});
+
+	test("strict: false で高エントロピーマスクだけ無効化できる", () => {
+		const code = 'Dim k As String = "x9Kp2mQ7vR4tW8nZ3cJ6bL1s"';
+		const result = maskCredentials(code, { vbSource: true, strict: false });
+		assert.strictEqual(result.content, code);
+		// 変数名ヒントによるマスクは strict: false でも生きている
+		const withHint = maskCredentials(
+			'wk_Pswd = "abc"',
+			{ vbSource: true, strict: false },
+		);
+		assert.strictEqual(withHint.content, 'wk_Pswd = "[MASKED]"');
+	});
+});
+

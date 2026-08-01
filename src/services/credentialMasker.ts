@@ -27,6 +27,12 @@ export interface MaskResult {
 export interface MaskOptions {
 	/** VB ソース(.vb)として文字列リテラル単位で処理するか */
 	vbSource: boolean;
+	/**
+	 * 高エントロピー文字列(ランダムな英数字列)も機械的にマスクするか。
+	 * 省略時は true(厳格モードが既定)。対象は文字列リテラル・コメント・
+	 * 設定値の中身のみで、識別子やコード構造は触らない
+	 */
+	strict?: boolean;
 }
 
 const MASK = "[MASKED]";
@@ -35,6 +41,7 @@ const KIND_PASSWORD = "パスワード";
 const KIND_USER = "ユーザーID";
 const KIND_TOKEN = "APIキー/トークン";
 const KIND_PRIVATE_KEY = "秘密鍵";
+const KIND_ENTROPY = "高エントロピー値";
 
 /** パスワード・秘密系とみなす変数名/キー名のヒント(日本語識別子対応) */
 const SECRET_NAME_HINT =
@@ -91,6 +98,14 @@ const ASSIGNMENT_TAIL = new RegExp(
 	`([${IDENT_HEAD}][${IDENT_BODY}]*)\\s*(?:As\\s+String\\s*)?=\\s*(?:_\\s*)?$`,
 );
 
+/** 名前付き引数(Foo(password:="x"))の直前コンテキスト */
+const NAMED_ARG_TAIL = new RegExp(
+	`([${IDENT_HEAD}][${IDENT_BODY}]*)\\s*:=\\s*(?:_\\s*)?$`,
+);
+
+/** 開き括弧の直前のメソッド名(callArgKind 用) */
+const CALLEE_TAIL = new RegExp(`([${IDENT_HEAD}][${IDENT_BODY}]*)\\s*$`);
+
 /** コメント内のコメントアウトされた代入('wk_Pswd = "x" など) */
 const COMMENT_ASSIGN = new RegExp(
 	`([${IDENT_HEAD}][${IDENT_BODY}]*)(\\s*=\\s*")([^"\\r\\n]+)(")`,
@@ -114,6 +129,68 @@ const BEARER_TOKEN = /\b(bearer\s+)([A-Za-z0-9._~+/-]{16,}=*)/gi;
 /** PRIVATE KEY ブロック(BEGIN/END 行は残し中身をマスク) */
 const PRIVATE_KEY_BLOCK =
 	/(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]+?(-----END [A-Z ]*PRIVATE KEY-----)/g;
+
+/**
+ * 高エントロピー文字列の候補(英数と base64/URL-safe 記号の 20 文字以上)。
+ * 判定は looksHighEntropy で絞る
+ */
+const HIGH_ENTROPY_CANDIDATE = /[A-Za-z0-9+/=_-]{20,}/g;
+
+/** 正規形の GUID(COM 参照・プロジェクト GUID 等で頻出。秘密ではない) */
+const GUID_FORM =
+	/^\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?$/;
+
+function charClassOf(ch: string): number {
+	if (ch >= "0" && ch <= "9") {
+		return 0;
+	}
+	if (ch >= "a" && ch <= "z") {
+		return 1;
+	}
+	if (ch >= "A" && ch <= "Z") {
+		return 2;
+	}
+	return 3;
+}
+
+/**
+ * ランダムな秘密らしさの近似判定。
+ * 数字と英字の両方を含み、文字種(数字/小文字/大文字/記号)の切り替わりが
+ * 長さに対して多いものだけを対象にする。一様ランダムな英数字列は約 6 割の
+ * 位置で切り替わるのに対し、"Windows10Update2026Info" のような普通の語は
+ * 3 割程度に留まるため、45% を閾値にする。既知トークン形式
+ * (ghp_... / AKIA...)の整った並びは対象外のまま各専用パターンに任せる
+ */
+function looksHighEntropy(token: string): boolean {
+	if (!/[0-9]/.test(token) || !/[A-Za-z]/.test(token)) {
+		return false;
+	}
+	if (GUID_FORM.test(token)) {
+		return false;
+	}
+	let transitions = 0;
+	for (let i = 1; i < token.length; i++) {
+		if (charClassOf(token[i]) !== charClassOf(token[i - 1])) {
+			transitions += 1;
+		}
+	}
+	return transitions >= Math.max(6, 0.45 * (token.length - 1));
+}
+
+/** 高エントロピー文字列のマスク(strict モード時のみ呼ばれる) */
+function maskEntropyText(
+	text: string,
+	findings: MaskFinding[],
+	toLine: (indexInText: number) => number,
+): string {
+	return text.replace(HIGH_ENTROPY_CANDIDATE, (token, offset: number) => {
+		if (!looksHighEntropy(token)) {
+			return token;
+		}
+		findings.push({ line: toLine(offset), kind: KIND_ENTROPY });
+		return MASK;
+	});
+}
 
 function lineOf(text: string, index: number): number {
 	let line = 1;
@@ -173,11 +250,37 @@ function kindForIdentifier(identifier: string): string | undefined {
 	return undefined;
 }
 
+/**
+ * 文字列リテラルが「秘密系メソッドの引数」かどうかを直前コンテキストから
+ * 判定する(Login("admin", "pass123") / SetPassword("x") 等)。
+ * 直近の未対応の開き括弧を遡り、その直前のメソッド名にヒントがあれば
+ * そのリテラルは引数とみなす。行(改行)を跨いだら打ち切る
+ */
+function callArgKind(tail: string): string | undefined {
+	let depth = 0;
+	for (let i = tail.length - 1; i >= 0; i--) {
+		const ch = tail[i];
+		if (ch === ")") {
+			depth += 1;
+		} else if (ch === "(") {
+			if (depth === 0) {
+				const callee = CALLEE_TAIL.exec(tail.slice(0, i));
+				return callee === null ? undefined : kindForIdentifier(callee[1]);
+			}
+			depth -= 1;
+		} else if (ch === "\n") {
+			return undefined;
+		}
+	}
+	return undefined;
+}
+
 /** コメント内のマスク(コメントアウトされた認証情報コードも対象にする) */
 function maskCommentText(
 	comment: string,
 	findings: MaskFinding[],
 	line: number,
+	strict: boolean,
 ): string {
 	let result = comment.replace(
 		COMMENT_ASSIGN,
@@ -191,6 +294,9 @@ function maskCommentText(
 		},
 	);
 	result = maskConnstrText(result, findings, () => line);
+	if (strict) {
+		result = maskEntropyText(result, findings, () => line);
+	}
 	return result;
 }
 
@@ -199,10 +305,16 @@ function maskCommentText(
  * 正規表現の一発置換だとリテラル連結("Password=" & 変数 など)をまたいで
  * 誤マスクするため、コード/文字列リテラル/コメントを区別して走査する。
  * - 「秘密系変数 = "リテラル"」→ リテラル全体をマスク
- * - それ以外のリテラル → 内部の接続文字列キー(PWD=xxx 等)のみマスク
+ * - 名前付き引数(password:="x")・秘密系メソッドの引数リテラルもマスク
+ * - それ以外のリテラル → 内部の接続文字列キー(PWD=xxx 等)のみマスク。
+ *   strict 時は高エントロピー文字列もマスク
  * - コメント → コメントアウトされた代入・接続文字列もマスク
  */
-function maskVbSource(content: string, findings: MaskFinding[]): string {
+function maskVbSource(
+	content: string,
+	findings: MaskFinding[],
+	strict: boolean,
+): string {
 	let out = "";
 	let i = 0;
 	const n = content.length;
@@ -231,12 +343,23 @@ function maskVbSource(content: string, findings: MaskFinding[]): string {
 			}
 			const closed = j < n && content[j] === '"';
 
-			// 直前のコードが「秘密系変数 = 」ならリテラル全体をマスク
-			const assignMatch = ASSIGNMENT_TAIL.exec(out.slice(-200));
-			const kind =
-				closed && inner.trim() !== "" && assignMatch !== null
-					? kindForIdentifier(assignMatch[1])
-					: undefined;
+			// 直前のコードが「秘密系変数 = 」「秘密系の名前付き引数 :=」
+			// 「秘密系メソッドの引数」ならリテラル全体をマスク
+			const tail = out.slice(-200);
+			let kind: string | undefined;
+			if (closed && inner.trim() !== "") {
+				const assignMatch = ASSIGNMENT_TAIL.exec(tail);
+				if (assignMatch !== null) {
+					kind = kindForIdentifier(assignMatch[1]);
+				}
+				if (kind === undefined) {
+					const namedArg = NAMED_ARG_TAIL.exec(tail);
+					kind =
+						namedArg !== null
+							? kindForIdentifier(namedArg[1])
+							: callArgKind(tail);
+				}
+			}
 			if (kind !== undefined) {
 				findings.push({ line: lineOf(content, i), kind });
 				out += `"${MASK}"`;
@@ -244,10 +367,15 @@ function maskVbSource(content: string, findings: MaskFinding[]): string {
 				continue;
 			}
 
-			// それ以外は接続文字列キーのみマスク
-			const maskedInner = maskConnstrText(inner, findings, () =>
+			// それ以外は接続文字列キー(strict 時は高エントロピー値も)のみマスク
+			let maskedInner = maskConnstrText(inner, findings, () =>
 				lineOf(content, i),
 			);
+			if (strict) {
+				maskedInner = maskEntropyText(maskedInner, findings, () =>
+					lineOf(content, i),
+				);
+			}
 			out += `"${maskedInner}${closed ? '"' : ""}`;
 			i = closed ? j + 1 : j;
 			continue;
@@ -259,7 +387,12 @@ function maskVbSource(content: string, findings: MaskFinding[]): string {
 			while (j < n && content[j] !== "\n") {
 				j += 1;
 			}
-			out += maskCommentText(content.slice(i, j), findings, lineOf(content, i));
+			out += maskCommentText(
+				content.slice(i, j),
+				findings,
+				lineOf(content, i),
+				strict,
+			);
 			i = j;
 			continue;
 		}
@@ -271,7 +404,11 @@ function maskVbSource(content: string, findings: MaskFinding[]): string {
 }
 
 /** 非 VB ファイル(config / XML / テキスト等)のマスク */
-function maskGenericText(content: string, findings: MaskFinding[]): string {
+function maskGenericText(
+	content: string,
+	findings: MaskFinding[],
+	strict: boolean,
+): string {
 	// XML 属性形式(値が引用符で囲まれるため接続文字列パターンでは拾えない)
 	let result = content.replace(
 		ATTR_SECRET,
@@ -290,6 +427,9 @@ function maskGenericText(content: string, findings: MaskFinding[]): string {
 		},
 	);
 	result = maskConnstrText(result, findings, (index) => lineOf(result, index));
+	if (strict) {
+		result = maskEntropyText(result, findings, (index) => lineOf(result, index));
+	}
 	return result;
 }
 
@@ -298,9 +438,10 @@ function maskGenericText(content: string, findings: MaskFinding[]): string {
  */
 export function maskCredentials(content: string, options: MaskOptions): MaskResult {
 	const findings: MaskFinding[] = [];
+	const strict = options.strict ?? true;
 	let result = options.vbSource
-		? maskVbSource(content, findings)
-		: maskGenericText(content, findings);
+		? maskVbSource(content, findings, strict)
+		: maskGenericText(content, findings, strict);
 
 	// ファイル種別によらない汎用シークレット形式
 	result = result.replace(

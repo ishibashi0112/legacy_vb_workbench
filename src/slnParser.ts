@@ -14,6 +14,11 @@ import type { ParseDiagnostic, SlnParseResult, SolutionProject } from "./types";
 /** ファイルシステム依存の注入口(テストでは fake を渡す) */
 export interface SlnParserDeps {
 	fileExists(absolutePath: string): boolean;
+	/**
+	 * ディレクトリ直下のファイル名一覧(取得できなければ undefined)。
+	 * 省略時は「同フォルダの未参照 .vbproj」警告をスキップする。
+	 */
+	listFileNames?(absolutePath: string): string[] | undefined;
 }
 
 /** Solution Folder のプロジェクト種別 GUID(大文字で比較) */
@@ -86,5 +91,43 @@ export function parseSln(
 		});
 	}
 
+	appendUnreferencedSiblingWarnings(solutionDir, projects, diagnostics, deps);
+
 	return { solutionPath, solutionDir, projects, diagnostics };
+}
+
+/**
+ * .sln と同じフォルダにあるのに .sln から参照されていない .vbproj を警告する。
+ * プロジェクトの作り直しや VCS の部分コミットで .sln だけが古い場合、
+ * その .vbproj が解析・エクスポート対象から漏れていることに気付けるようにする。
+ */
+function appendUnreferencedSiblingWarnings(
+	solutionDir: string,
+	projects: SolutionProject[],
+	diagnostics: ParseDiagnostic[],
+	deps: SlnParserDeps,
+): void {
+	const names = deps.listFileNames?.(solutionDir);
+	if (names === undefined) {
+		return;
+	}
+	// Windows 前提のため大文字小文字は区別しない
+	const referenced = new Set(
+		projects.map((project) => project.absolutePath.toLowerCase()),
+	);
+	const unreferenced = names
+		.filter((name) => /\.vbproj$/i.test(name))
+		.filter(
+			(name) =>
+				!referenced.has(resolveWindowsPath(name, solutionDir).toLowerCase()),
+		)
+		.sort((a, b) => a.localeCompare(b));
+	for (const name of unreferenced) {
+		diagnostics.push({
+			severity: "warning",
+			message:
+				`同じフォルダに .sln から参照されていない .vbproj があります: ${name}` +
+				"(.sln が古いか別プロジェクトの可能性があります。こちらを対象にする場合は .vbproj を直接指定してください)",
+		});
+	}
 }

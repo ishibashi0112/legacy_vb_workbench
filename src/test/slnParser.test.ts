@@ -98,3 +98,60 @@ suite("slnParser: 入力の頑健性", () => {
 		);
 	});
 });
+
+suite("slnParser: 同フォルダの未参照 .vbproj 警告", () => {
+	const CONTENT =
+		"Microsoft Visual Studio Solution File, Format Version 12.00\n" +
+		'Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "App", "App.vbproj", "{B1111111-1111-1111-1111-111111111111}"\n' +
+		"EndProject\n";
+
+	function fakeDeps(names: string[]) {
+		return {
+			fileExists: (): boolean => true,
+			listFileNames: (): string[] => names,
+		};
+	}
+
+	test(".sln から参照されていない同フォルダの .vbproj に警告を出す", () => {
+		const result = parseSln(
+			CONTENT,
+			"/tmp/sol/Test.sln",
+			fakeDeps(["App.vbproj", "Old.vbproj", "readme.txt"]),
+		);
+		const warnings = result.diagnostics.filter(
+			(d) => d.severity === "warning" && d.message.includes("参照されていない"),
+		);
+		assert.strictEqual(warnings.length, 1);
+		assert.ok(warnings[0].message.includes("Old.vbproj"));
+	});
+
+	test("参照済み .vbproj は大文字小文字が違っても警告しない", () => {
+		const result = parseSln(
+			CONTENT,
+			"/tmp/sol/Test.sln",
+			fakeDeps(["APP.VBPROJ"]),
+		);
+		assert.ok(
+			!result.diagnostics.some((d) => d.message.includes("参照されていない")),
+		);
+	});
+
+	test("listFileNames が渡されない場合はこのチェックをスキップする", () => {
+		const result = parseSln(CONTENT, "/tmp/sol/Test.sln", {
+			fileExists: () => true,
+		});
+		assert.ok(
+			!result.diagnostics.some((d) => d.message.includes("参照されていない")),
+		);
+	});
+
+	test("ディレクトリを読めない場合(undefined)もスキップする", () => {
+		const result = parseSln(CONTENT, "/tmp/sol/Test.sln", {
+			fileExists: () => true,
+			listFileNames: () => undefined,
+		});
+		assert.ok(
+			!result.diagnostics.some((d) => d.message.includes("参照されていない")),
+		);
+	});
+});

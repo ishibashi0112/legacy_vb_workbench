@@ -1,5 +1,17 @@
 # Change Log
 
+## [0.7.0] - 2026-08-01
+
+- .sln と同じフォルダにあるのに .sln から参照されていない .vbproj を
+  warning 診断として報告(プロジェクトの作り直しや VCS の部分コミットで
+  .sln だけが古い場合、その .vbproj が解析・エクスポート対象から漏れて
+  いることに気付けるようにする)
+
+## [0.6.0] - 2026-08-01
+
+- Repomix エクスポートで除外した Designer.vb から UI サマリー
+  (<ui_summary>)を自動生成して埋め込み(設定 exportUiSummary で無効化可)
+
 ## [0.5.0] - 2026-08-01
 
 - Repomix エクスポートで .gitignore / .repomixignore を尊重(本家 repomix と

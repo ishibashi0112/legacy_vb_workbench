@@ -66,6 +66,16 @@ const STATUS_ORDER: readonly ProjectItemStatus[] = [
 
 const FS_DEPS = {
 	fileExists: (absolutePath: string): boolean => fs.existsSync(absolutePath),
+	listFileNames: (absolutePath: string): string[] | undefined => {
+		try {
+			return fs
+				.readdirSync(absolutePath, { withFileTypes: true })
+				.filter((entry) => entry.isFile())
+				.map((entry) => entry.name);
+		} catch {
+			return undefined;
+		}
+	},
 };
 
 export function activate(context: vscode.ExtensionContext): void {

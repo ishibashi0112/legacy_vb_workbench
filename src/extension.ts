@@ -486,6 +486,7 @@ async function exportRepomix(
 	const maskCredentials = exportConfig.get<boolean>("exportMaskCredentials") ?? true;
 	const respectGitignore =
 		exportConfig.get<boolean>("exportRespectGitignore") ?? true;
+	const uiSummary = exportConfig.get<boolean>("exportUiSummary") ?? true;
 
 	let sources: RepomixSource[];
 	if (/\.sln$/i.test(target)) {
@@ -553,7 +554,7 @@ async function exportRepomix(
 				? (absolutePath) => gitignore.ignoreReasonFor(absolutePath)
 				: undefined,
 		},
-		{ includeSensitive, maskCredentials },
+		{ includeSensitive, maskCredentials, uiSummary },
 	);
 
 	const saveUri = await vscode.window.showSaveDialog({
@@ -578,11 +579,13 @@ async function exportRepomix(
 	const maskNote = maskCredentials
 		? ` / 認証情報マスク ${output.maskedCount} 件`
 		: "(マスク無効)";
+	const uiSummaryNote =
+		output.uiSummaryCount > 0 ? ` / UI サマリー ${output.uiSummaryCount} 件` : "";
 	void vscode.window.showInformationMessage(
 		`Repomix 形式で出力しました: ${output.fileCount} ファイル / 約 ${Math.max(
 			1,
 			Math.round(output.totalChars / 1000),
-		)}K 文字(スキップ ${output.skipped.length} 件${maskNote})`,
+		)}K 文字(スキップ ${output.skipped.length} 件${maskNote}${uiSummaryNote})`,
 	);
 }
 

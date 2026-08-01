@@ -215,6 +215,94 @@ suite("repomixExporter: 未解決項目の扱い", () => {
 	});
 });
 
+suite("repomixExporter: ui_summary(Designer 要約)", () => {
+	/** Designer.vb だけ fixture の実内容を返し、他は fake を返す reader */
+	const designerAwareDeps = {
+		readTextFile: (absolutePath: string): string | undefined =>
+			/\.designer\.vb$/i.test(absolutePath)
+				? fs.readFileSync(absolutePath, "utf8")
+				: fakeDeps.readTextFile(absolutePath),
+	};
+	const sources: RepomixSource[] = [{ label: "Basic", parseResult: parseBasic() }];
+
+	test("既定で Designer.vb は <ui_summary> として要約される", () => {
+		const result = buildRepomixOutput("Basic.vbproj", sources, designerAwareDeps, {
+			includeSensitive: false,
+			maskCredentials: false,
+		});
+		assert.strictEqual(result.uiSummaryCount, 1);
+		assert.ok(
+			result.content.includes(
+				'<ui_summary path="Basic\\Forms\\OrderForm.Designer.vb" form="OrderForm">',
+			),
+		);
+		assert.ok(result.content.includes('- btnSave: Button — Text "保存"'));
+		assert.ok(result.content.includes('フォームタイトル: "受注入力"'));
+		// 原文(座標行)は含まれない
+		assert.ok(!result.content.includes("System.Drawing.Point"));
+		assert.ok(
+			result.skipped.some(
+				(s) =>
+					s.path === "Basic\\Forms\\OrderForm.Designer.vb" &&
+					s.reason.includes("要約済み"),
+			),
+		);
+	});
+
+	test("uiSummary: false で従来どおり要約なしのスキップになる", () => {
+		const result = buildRepomixOutput("Basic.vbproj", sources, designerAwareDeps, {
+			includeSensitive: false,
+			maskCredentials: false,
+			uiSummary: false,
+		});
+		assert.strictEqual(result.uiSummaryCount, 0);
+		assert.ok(!result.content.includes("<ui_summary path="));
+	});
+
+	test("includeSensitive: true では原文が含まれ要約は出さない", () => {
+		const result = buildRepomixOutput("Basic.vbproj", sources, designerAwareDeps, {
+			includeSensitive: true,
+			maskCredentials: false,
+		});
+		assert.strictEqual(result.uiSummaryCount, 0);
+		assert.ok(!result.content.includes("<ui_summary path="));
+		assert.ok(
+			result.content.includes('<file path="Basic\\Forms\\OrderForm.Designer.vb">'),
+		);
+	});
+
+	test(".gitignore 対象の Designer.vb は要約もしない", () => {
+		const result = buildRepomixOutput(
+			"Basic.vbproj",
+			sources,
+			{
+				readTextFile: designerAwareDeps.readTextFile,
+				ignoreReasonFor: (absolutePath) =>
+					/\.designer\.vb$/i.test(absolutePath) ? "/base/.gitignore" : undefined,
+			},
+			{ includeSensitive: false, maskCredentials: false },
+		);
+		assert.strictEqual(result.uiSummaryCount, 0);
+		assert.ok(!result.content.includes("<ui_summary path="));
+	});
+
+	test("コントロールを抽出できない Designer.vb は通常スキップ扱い", () => {
+		const result = buildRepomixOutput("Basic.vbproj", sources, fakeDeps, {
+			includeSensitive: false,
+			maskCredentials: false,
+		});
+		assert.strictEqual(result.uiSummaryCount, 0);
+		assert.ok(!result.content.includes("<ui_summary path="));
+		assert.ok(
+			result.skipped.some(
+				(s) =>
+					s.path === "Basic\\Forms\\OrderForm.Designer.vb" &&
+					s.reason.includes("Designer"),
+			),
+		);
+	});
+});
+
 suite("repomixExporter: decodeSourceBuffer", () => {
 	test("CP932(Shift_JIS)を自動判定して復元する", () => {
 		const original = "' 日本語コメント付きの VB コード\r\nModule M\r\nEnd Module";

@@ -15,6 +15,10 @@
 import * as iconv from "iconv-lite";
 import { buildLogicalTree } from "../logicalTreeBuilder";
 import { type MaskFinding, maskCredentials } from "./credentialMasker";
+import {
+	parseDesignerVb,
+	renderDesignerControlLines,
+} from "./designerSummary";
 import type { FileNode, LegacyTreeNode, VbprojParseResult } from "../types";
 
 export interface RepomixSource {
@@ -38,6 +42,12 @@ export interface RepomixExportOptions {
 	includeSensitive: boolean;
 	/** 認証情報らしき値を [MASKED] に自動置換するか */
 	maskCredentials: boolean;
+	/**
+	 * Designer 原文を含めない場合に、*.Designer.vb からコントロール構成を
+	 * 要約した <ui_summary> を埋め込むか(既定 true)。
+	 * includeSensitive が true のとき(原文が含まれるとき)は使われない
+	 */
+	uiSummary?: boolean;
 }
 
 export interface SkippedFile {
@@ -58,6 +68,8 @@ export interface RepomixExportResult {
 	/** マスクを行ったファイルと箇所の一覧 */
 	maskedFiles: MaskedFile[];
 	maskedCount: number;
+	/** <ui_summary> として要約した Designer.vb の件数 */
+	uiSummaryCount: number;
 }
 
 /** 内容を含めないバイナリ系拡張子(小文字) */
@@ -187,6 +199,51 @@ function escapeAttribute(value: string): string {
 }
 
 /**
+ * 除外した *.Designer.vb から <ui_summary> エントリを生成する。
+ * 対象外・読めない・コントロールが取れない場合は undefined
+ * (呼び出し側は通常のスキップ扱いにする)。
+ */
+function buildUiSummaryEntry(
+	node: FileNode,
+	displayPath: string,
+	deps: RepomixExportDeps,
+): string | undefined {
+	const item = node.item;
+	if (
+		!item.isSensitive ||
+		item.sourcePath === undefined ||
+		!item.exists ||
+		!/\.designer\.vb$/i.test(item.logicalPath)
+	) {
+		return undefined;
+	}
+	if (deps.ignoreReasonFor?.(item.sourcePath) !== undefined) {
+		return undefined; // .gitignore 対象は要約もしない
+	}
+	const source = deps.readTextFile(item.sourcePath);
+	if (source === undefined) {
+		return undefined;
+	}
+	const summary = parseDesignerVb(source);
+	if (summary.controlCount === 0) {
+		return undefined;
+	}
+	const fileName = item.logicalPath.split("\\").pop() ?? item.logicalPath;
+	const formName =
+		summary.className ?? fileName.replace(/\.designer\.vb$/i, "");
+	const lines = [
+		`<ui_summary path="${escapeAttribute(displayPath)}" form="${escapeAttribute(formName)}">`,
+		"Designer 自動生成コードからの要約(コントロール名: 型 — Text。座標・サイズ等のレイアウトは省略):",
+	];
+	if (summary.formText !== undefined) {
+		lines.push(`フォームタイトル: "${summary.formText}"`);
+	}
+	lines.push(...renderDesignerControlLines(summary.rootControls));
+	lines.push("</ui_summary>");
+	return lines.join("\n");
+}
+
+/**
  * Repomix 形式のテキストを生成する。
  * @param title 出力対象の表示名(Sample.sln など)
  */
@@ -202,6 +259,9 @@ export function buildRepomixOutput(
 	const maskedFiles: MaskedFile[] = [];
 	let fileCount = 0;
 	let totalChars = 0;
+	let uiSummaryCount = 0;
+	const uiSummaryEnabled =
+		(options.uiSummary ?? true) && !options.includeSensitive;
 
 	for (const source of sources) {
 		const tree = buildLogicalTree(source.parseResult);
@@ -214,7 +274,20 @@ export function buildRepomixOutput(
 			const displayPath = `${source.label}\\${node.item.logicalPath}`;
 			const reason = skipReason(node, options);
 			if (reason !== undefined) {
-				skipped.push({ path: displayPath, reason });
+				const uiSummaryEntry = uiSummaryEnabled
+					? buildUiSummaryEntry(node, displayPath, deps)
+					: undefined;
+				if (uiSummaryEntry !== undefined) {
+					fileEntries.push(uiSummaryEntry);
+					totalChars += uiSummaryEntry.length;
+					uiSummaryCount += 1;
+					skipped.push({
+						path: displayPath,
+						reason: "Designer 関連(<ui_summary> に要約済み)",
+					});
+				} else {
+					skipped.push({ path: displayPath, reason });
+				}
 				continue;
 			}
 			// skipReason 通過時点で sourcePath は解決済み
@@ -287,7 +360,11 @@ export function buildRepomixOutput(
 		"<notes>",
 		"- 文字コードは UTF-8 に統一済み(元ファイルの Shift_JIS 等は自動変換)",
 		"- EmbeddedResource(.resx)は含まれない",
-		`- Designer 関連ファイルは${options.includeSensitive ? "含まれる" : "含まれない"}`,
+		options.includeSensitive
+			? "- Designer 関連ファイルは含まれる"
+			: uiSummaryEnabled
+				? "- Designer 関連ファイルの原文は含まれない(フォームのコントロール構成のみ <ui_summary> として要約)"
+				: "- Designer 関連ファイルは含まれない",
 		options.maskCredentials
 			? "- 認証情報らしき値は [MASKED] に自動置換済み(<masked_credentials> を参照。機械判定のため漏れの可能性はあり、共有前に目視確認を推奨)"
 			: "- 認証情報の自動マスクは無効(ハードコードされた認証情報がそのまま含まれる可能性あり)",
@@ -317,5 +394,13 @@ export function buildRepomixOutput(
 		"",
 	].join("\n");
 
-	return { content, fileCount, totalChars, skipped, maskedFiles, maskedCount };
+	return {
+		content,
+		fileCount,
+		totalChars,
+		skipped,
+		maskedFiles,
+		maskedCount,
+		uiSummaryCount,
+	};
 }

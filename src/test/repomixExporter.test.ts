@@ -100,6 +100,35 @@ suite("repomixExporter: buildRepomixOutput", () => {
 		);
 	});
 
+	test("includeSensitive に述語を渡すと一致した Designer だけ含める", () => {
+		const selective = buildRepomixOutput("Basic.vbproj", sources, fakeDeps, {
+			includeSensitive: (logicalPath) =>
+				logicalPath === "Forms\\OrderForm.Designer.vb",
+			maskCredentials: false,
+		});
+		assert.ok(
+			selective.content.includes(
+				'<file path="Basic\\Forms\\OrderForm.Designer.vb">',
+			),
+		);
+		assert.ok(
+			!selective.content.includes(
+				'<file path="Basic\\My Project\\Application.Designer.vb"',
+			),
+		);
+		assert.ok(
+			selective.skipped.some(
+				(s) =>
+					s.path === "Basic\\My Project\\Application.Designer.vb" &&
+					s.reason.includes("Designer"),
+			),
+		);
+		// resx は述語でも常に除外
+		assert.ok(
+			!selective.content.includes('<file path="Basic\\Forms\\OrderForm.resx"'),
+		);
+	});
+
 	test("読み込み失敗はスキップ一覧に載る", () => {
 		const failing = buildRepomixOutput(
 			"Basic.vbproj",
@@ -268,6 +297,26 @@ suite("repomixExporter: ui_summary(Designer 要約)", () => {
 		assert.ok(!result.content.includes("<ui_summary path="));
 		assert.ok(
 			result.content.includes('<file path="Basic\\Forms\\OrderForm.Designer.vb">'),
+		);
+	});
+
+	test("述語で含めなかった Designer.vb は <ui_summary> として要約される", () => {
+		const result = buildRepomixOutput("Basic.vbproj", sources, designerAwareDeps, {
+			includeSensitive: (logicalPath) =>
+				logicalPath === "My Project\\Application.Designer.vb",
+			maskCredentials: false,
+		});
+		// 含めた側は原文、含めなかった側は要約に回る
+		assert.ok(
+			result.content.includes(
+				'<file path="Basic\\My Project\\Application.Designer.vb">',
+			),
+		);
+		assert.strictEqual(result.uiSummaryCount, 1);
+		assert.ok(
+			result.content.includes(
+				'<ui_summary path="Basic\\Forms\\OrderForm.Designer.vb" form="OrderForm">',
+			),
 		);
 	});
 

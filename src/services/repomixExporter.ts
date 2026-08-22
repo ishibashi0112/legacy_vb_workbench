@@ -38,8 +38,13 @@ export interface RepomixExportDeps {
 }
 
 export interface RepomixExportOptions {
-	/** Designer 関連(*.Designer.vb / *.resx 除く自動生成系)を含めるか */
-	includeSensitive: boolean;
+	/**
+	 * Designer 関連(*.Designer.vb / *.resx 除く自動生成系)を含めるか。
+	 * boolean は全件一括の指定。述語を渡すと論理パス(プロジェクト名を含まない
+	 * `\` 区切り)ごとに判定し、true を返したファイルだけ原文を含める。
+	 * 含めなかった Designer.vb は従来どおりスキップ + <ui_summary> 要約の対象
+	 */
+	includeSensitive: boolean | ((logicalPath: string) => boolean);
 	/** 認証情報らしき値を [MASKED] に自動置換するか */
 	maskCredentials: boolean;
 	/**
@@ -173,6 +178,14 @@ function collectFileNodes(node: LegacyTreeNode, into: FileNode[]): void {
 	}
 }
 
+/** includeSensitive(boolean / 述語)をファイル単位の判定に解決する */
+function includesSensitiveFile(
+	include: RepomixExportOptions["includeSensitive"],
+	logicalPath: string,
+): boolean {
+	return typeof include === "function" ? include(logicalPath) : include;
+}
+
 /** 含める/除外の判定。除外なら理由を返す */
 function skipReason(
 	node: FileNode,
@@ -188,7 +201,10 @@ function skipReason(
 	if (!item.exists) {
 		return "実ファイルが存在しません";
 	}
-	if (item.isSensitive && !options.includeSensitive) {
+	if (
+		item.isSensitive &&
+		!includesSensitiveFile(options.includeSensitive, item.logicalPath)
+	) {
 		return "Designer 関連(設定 exportIncludeDesignerFiles で含められます)";
 	}
 	const fileName = item.logicalPath.split("\\").pop() ?? "";
@@ -279,8 +295,9 @@ export function buildRepomixOutput(
 	let fileCount = 0;
 	let totalChars = 0;
 	let uiSummaryCount = 0;
+	// 述語指定時は「含めなかった Designer」が残るので要約は有効のまま
 	const uiSummaryEnabled =
-		(options.uiSummary ?? true) && !options.includeSensitive;
+		(options.uiSummary ?? true) && options.includeSensitive !== true;
 	const strictMask = options.strictMask ?? true;
 
 	for (const source of sources) {
@@ -394,11 +411,15 @@ export function buildRepomixOutput(
 		"<notes>",
 		"- 文字コードは UTF-8 に統一済み(元ファイルの Shift_JIS 等は自動変換)",
 		"- EmbeddedResource(.resx)は含まれない",
-		options.includeSensitive
+		options.includeSensitive === true
 			? "- Designer 関連ファイルは含まれる"
-			: uiSummaryEnabled
-				? "- Designer 関連ファイルの原文は含まれない(フォームのコントロール構成のみ <ui_summary> として要約)"
-				: "- Designer 関連ファイルは含まれない",
+			: typeof options.includeSensitive === "function"
+				? uiSummaryEnabled
+					? "- Designer 関連ファイルは指定されたもののみ原文を含む(それ以外はフォームのコントロール構成のみ <ui_summary> として要約)"
+					: "- Designer 関連ファイルは指定されたもののみ含まれる"
+				: uiSummaryEnabled
+					? "- Designer 関連ファイルの原文は含まれない(フォームのコントロール構成のみ <ui_summary> として要約)"
+					: "- Designer 関連ファイルは含まれない",
 		options.maskCredentials
 			? "- 認証情報らしき値は [MASKED] に自動置換済み。[MASKED] は伏せ字であり、元のソースには実際の値が存在する(<masked_credentials> を参照。機械判定のため漏れの可能性はあり、共有前に目視確認を推奨)"
 			: "- 認証情報の自動マスクは無効(ハードコードされた認証情報がそのまま含まれる可能性あり)",

@@ -26,6 +26,8 @@ export class LegacyProjectTreeProvider
 	implements vscode.TreeDataProvider<LegacyTreeNode>
 {
 	private root: LegacyTreeNode | undefined;
+	/** スタートアッププロジェクトの .vbproj パス(小文字化して比較) */
+	private startupProjectPath: string | undefined;
 
 	private readonly onDidChangeEmitter = new vscode.EventEmitter<
 		LegacyTreeNode | undefined
@@ -35,6 +37,12 @@ export class LegacyProjectTreeProvider
 	/** 解析し直した結果でツリー全体を差し替える */
 	setRoot(root: LegacyTreeNode | undefined): void {
 		this.root = root;
+		this.onDidChangeEmitter.fire(undefined);
+	}
+
+	/** スタートアッププロジェクトの表示を更新する(.vbproj 単体選択時は undefined) */
+	setStartupProject(projectPath: string | undefined): void {
+		this.startupProjectPath = projectPath?.toLowerCase();
 		this.onDidChangeEmitter.fire(undefined);
 	}
 
@@ -79,6 +87,10 @@ export class LegacyProjectTreeProvider
 		item.iconPath = new vscode.ThemeIcon("project");
 		item.tooltip = projectPath;
 		item.contextValue = "project";
+		if (this.startupProjectPath === projectPath.toLowerCase()) {
+			item.description = "スタートアップ";
+			item.iconPath = new vscode.ThemeIcon("play");
+		}
 		return item;
 	}
 

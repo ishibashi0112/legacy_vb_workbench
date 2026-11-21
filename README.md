@@ -20,6 +20,15 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
 - **MSBuild ビルド**(`Legacy VB: Build`)— MSBuild 12.0 等を自動検出し、
   `/t:Build /p:Configuration=Debug /nologo` で実行(VS と同条件、`/m` なし)。
   出力は Output「Legacy VB Build」へストリーム表示、通知からキャンセル可
+- **デバッグなしで開始**(`Legacy VB: Start Without Debugging`、Ctrl+F5)— Visual Studio の
+  Ctrl+F5 相当。ビルドしてからスタートアッププロジェクトの EXE を起動する。
+  コマンドライン引数・作業ディレクトリ・外部プログラムの開始は VS のデバッグタブが
+  保存する `<プロジェクト>.vbproj.user` から読むので、VS で設定済みの値がそのまま使われる。
+  アプリの標準出力・標準エラー・終了コードは Output「Legacy VB Run」へ。
+  異常終了時は Windows イベントログから .NET の未処理例外(型・スタックトレース)も表示する。
+  デバッガーは接続しないため、ブレークポイントやステップ実行は Visual Studio を使う
+- **スタートアッププロジェクト**(`Legacy VB: Set as Startup Project`)— .sln に起動できる
+  プロジェクトが複数ある場合に指定(初回の実行時にも選択を求め、.sln ごとに記憶)
 - **Visual Studio で開く**(`Legacy VB: Open in Visual Studio`)— devenv.exe を
   検出して `.sln` / `.vbproj` を開く(デザイナー・デバッグへ戻る導線)
 - **AI 向けエクスポート**(`Legacy VB: Export for AI (Repomix)`)— `.sln` / `.vbproj`
@@ -39,7 +48,7 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
   機械判定のため漏れはあり得ます — **共有前の目視確認は引き続き推奨**
 
 ビルド・VS 起動は **MSBuild / Visual Studio が存在する Windows 上の VS Code**
-(RDP 先の開発 PC)でのみ動作します。EXE 起動は今後のフェーズです。
+(RDP 先の開発 PC)でのみ動作します(EXE 起動も同様)。
 
 ## 設定
 
@@ -49,6 +58,7 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
 | `legacyVbWorkbench.devenvPath` | (空) | devenv.exe のフルパス。空なら自動検出(同上) |
 | `legacyVbWorkbench.buildConfiguration` | `Debug` | ビルドの Configuration |
 | `legacyVbWorkbench.msbuildOutputEncoding` | `auto` | MSBuild 出力のエンコーディング。auto は自動判定(MSBuild 12.0 = cp932、MSBuild 17/18 = utf8) |
+| `legacyVbWorkbench.runBuildBeforeStart` | `true` | Start Without Debugging で起動前にビルドする。false なら既存の EXE をそのまま起動 |
 | `legacyVbWorkbench.exportIncludeDesignerFiles` | `false` | Repomix エクスポートに Designer 関連ファイルを含める |
 | `legacyVbWorkbench.exportMaskCredentials` | `true` | Repomix エクスポートで認証情報らしき値を `[MASKED]` に自動置換 |
 | `legacyVbWorkbench.exportRespectGitignore` | `true` | Repomix エクスポートで `.gitignore` / `.repomixignore` を尊重して除外 |
@@ -71,6 +81,8 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
    - エディター領域へのドラッグ&ドロップでも開けます(分割エリアへのドロップ可。
      Ctrl/Cmd+クリックで複数選択してまとめてドラッグ可)
 4. 前回の選択はウィンドウごとに記憶され、起動時に復元されます
+5. ツールバーの ▶(Start Without Debugging)または Ctrl+F5 でビルドしてアプリを起動します
+   (.sln に起動できるプロジェクトが複数あると、初回にスタートアッププロジェクトを選びます)
 
 補足: ドラッグで開いた場合は Designer 関連ファイルの確認ダイアログは表示されません
 (クリック操作時のみ)。ツリー内へのドロップによるファイル移動は、既存 `.vbproj` を
@@ -79,6 +91,10 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
 ## 制約(仕様)
 
 - 静的 XML 解析のみで、MSBuild 評価は行いません(`Import` 先・`Choose`・プロパティ展開は未対応)
+- 起動設定の読み取りは、PropertyGroup の `'$(Configuration)|$(Platform)' == '...'` のような単純な比較だけを評価します。
+  `Exists()` などを含む条件は無視して Output に警告を出します。EXE の場所はビルド出力から取るので、通常はこの影響を受けません
+- デバッガーは接続しません。UI スレッドの例外は WinForms 標準の例外ダイアログに表示され、
+  `Debug.WriteLine` の出力はデバッガーがないため表示されません(`Console.WriteLine` は表示されます)
 - `.sln` は `Project` 行の抽出のみ。Solution Folder のネスト(`NestedProjects`)は未対応でフラット表示
 - 評価できない項目は推測せず、警告付きでそのまま表示します
 

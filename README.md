@@ -84,6 +84,19 @@ Visual Studio を置き換えるものではありません。WinForms デザイ
 5. ツールバーの ▶(Start Without Debugging)または Ctrl+F5 でビルドしてアプリを起動します
    (.sln に起動できるプロジェクトが複数あると、初回にスタートアッププロジェクトを選びます)
 
+### Git の差分を VS Code で見る
+
+Visual Studio で Git 管理している .sln は、VS Code 標準の「ソース管理」ビューで
+変更一覧・差分を見られます。VS Code の Git は**開いているフォルダー配下**の
+リポジトリしか認識しないため、.sln を選ぶと拡張がリポジトリのルートを探し、
+開かれていなければフォルダーを開くよう提案します(選択中の .sln は引き継がれます)。
+
+- 必要なもの: [Git for Windows](https://git-scm.com/download/win)(VS2013 は git.exe
+  なしで Git を扱えますが、VS Code には必要です)
+- Shift_JIS のソースは `files.autoGuessEncoding` を有効にしないと差分が文字化けします
+  (拡張が検出して提案します)
+- ツリーのファイルを右クリック →「Legacy VB: Open Changes (Git)」で、そのファイルの差分を直接開けます
+
 補足: ドラッグで開いた場合は Designer 関連ファイルの確認ダイアログは表示されません
 (クリック操作時のみ)。ツリー内へのドロップによるファイル移動は、既存 `.vbproj` を
 変更しない方針のため対応していません。

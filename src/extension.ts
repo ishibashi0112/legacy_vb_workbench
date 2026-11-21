@@ -22,6 +22,11 @@ import {
 } from "./services/msbuildLocator";
 import { GitignoreEvaluator } from "./services/gitignoreService";
 import {
+	evaluateGitWorkspace,
+	isSameOrInside,
+	looksLikeNonUtf8,
+} from "./services/gitWorkspaceService";
+import {
 	buildRepomixOutput,
 	decodeSourceBuffer,
 	type RepomixSource,
@@ -137,6 +142,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			const selection: LastSelection = { kind: "vbproj", path: uri.fsPath };
 			await context.workspaceState.update(LAST_SELECTION_KEY, selection);
 			runSelection(selection);
+			void checkGitIntegration(context, selection);
 		}),
 
 		vscode.commands.registerCommand("legacyVbWorkbench.selectSolution", async () => {
@@ -153,6 +159,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			const selection: LastSelection = { kind: "sln", path: uri.fsPath };
 			await context.workspaceState.update(LAST_SELECTION_KEY, selection);
 			runSelection(selection);
+			void checkGitIntegration(context, selection);
 		}),
 
 		vscode.commands.registerCommand("legacyVbWorkbench.refresh", () => {
@@ -204,7 +211,32 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand("legacyVbWorkbench.exportRepomix", (node: unknown) => {
 			void exportRepomix(context, node);
 		}),
+
+		vscode.commands.registerCommand(
+			"legacyVbWorkbench.openGitRepositoryFolder",
+			(node: unknown) => {
+				const target = resolveBuildTarget(node, context);
+				if (target === undefined) {
+					void vscode.window.showWarningMessage(
+						"先に「Legacy VB: Select Solution」または「Legacy VB: Select VB Project」で対象を選択してください。",
+					);
+					return;
+				}
+				const kind = target.toLowerCase().endsWith(".sln") ? "sln" : "vbproj";
+				void checkGitIntegration(context, { kind, path: target }, { manual: true });
+			},
+		),
+
+		vscode.commands.registerCommand("legacyVbWorkbench.openGitChanges", (node: unknown) => {
+			if (!isFileNode(node)) {
+				return;
+			}
+			void openGitChanges(node);
+		}),
 	);
+
+	// フォルダーを開き直した直後は、開く前に選んでいた .sln / .vbproj を引き継ぐ
+	adoptPendingSelection(context);
 
 	// 起動時に前回の選択があれば自動で復元する
 	const last = context.workspaceState.get<unknown>(LAST_SELECTION_KEY);
@@ -1277,4 +1309,334 @@ function printProjectBody(
 	channel.appendLine("--- ProjectItem[] (JSON) ---");
 	channel.appendLine(JSON.stringify(result.items, null, 2));
 	channel.appendLine("");
+}
+
+// ---------------------------------------------------------------------------
+// VS Code 標準のソース管理(Git)との連携
+// ---------------------------------------------------------------------------
+
+/**
+ * フォルダーを開き直す前に選んでいた対象(キーは小文字化したフォルダーパス)。
+ * workspaceState はフォルダーごとに別物なので、開き直すと前回の選択が消える。
+ * globalState に一時保存し、新しいウィンドウ側の activate で引き取る。
+ */
+const PENDING_SELECTIONS_KEY = "legacyVbWorkbench.pendingSelections";
+/** 「今後表示しない」を選んだリポジトリ(小文字化したルートパス) */
+const GIT_PROMPT_DISMISSED_KEY = "legacyVbWorkbench.gitPromptDismissed";
+/** 文字コード案内を「今後表示しない」にしたか */
+const ENCODING_PROMPT_DISMISSED_KEY = "legacyVbWorkbench.encodingPromptDismissed";
+
+function readStringRecord(
+	context: vscode.ExtensionContext,
+	key: string,
+): Record<string, unknown> {
+	const raw = context.globalState.get<unknown>(key);
+	return typeof raw === "object" && raw !== null && !Array.isArray(raw)
+		? { ...(raw as Record<string, unknown>) }
+		: {};
+}
+
+async function savePendingSelection(
+	context: vscode.ExtensionContext,
+	folder: string,
+	selection: LastSelection,
+): Promise<void> {
+	const map = readStringRecord(context, PENDING_SELECTIONS_KEY);
+	map[folder.toLowerCase()] = selection;
+	await context.globalState.update(PENDING_SELECTIONS_KEY, map);
+}
+
+function adoptPendingSelection(context: vscode.ExtensionContext): void {
+	const folders = workspaceFolderPaths();
+	if (folders.length === 0) {
+		return;
+	}
+	const map = readStringRecord(context, PENDING_SELECTIONS_KEY);
+	let changed = false;
+	for (const folder of folders) {
+		const key = folder.toLowerCase();
+		const pending = map[key];
+		if (pending === undefined) {
+			continue;
+		}
+		delete map[key];
+		changed = true;
+		if (isLastSelection(pending)) {
+			void context.workspaceState.update(LAST_SELECTION_KEY, pending);
+		}
+	}
+	if (changed) {
+		void context.globalState.update(PENDING_SELECTIONS_KEY, map);
+	}
+}
+
+function workspaceFolderPaths(): string[] {
+	return (vscode.workspace.workspaceFolders ?? [])
+		.filter((folder) => folder.uri.scheme === "file")
+		.map((folder) => folder.uri.fsPath);
+}
+
+/**
+ * .sln / .vbproj を選んだときに、VS Code のソース管理で差分が見られる状態かを確認する。
+ * 1. git.exe があるか(VS2013 は git.exe なしで Git を扱えるが、VS Code は必須)
+ * 2. リポジトリのフォルダーがワークスペースとして開かれているか
+ * 3. Shift_JIS のソースが文字化けしない設定か
+ */
+async function checkGitIntegration(
+	context: vscode.ExtensionContext,
+	selection: LastSelection,
+	options: { manual?: boolean } = {},
+): Promise<void> {
+	const manual = options.manual === true;
+	const status = evaluateGitWorkspace(selection.path, workspaceFolderPaths(), {
+		pathExists: (p) => fs.existsSync(p),
+	});
+
+	if (status.kind === "no-repository") {
+		if (manual) {
+			void vscode.window.showInformationMessage(
+				`${path.basename(selection.path)} の上位フォルダーに .git が見つかりません(Git 管理外のため、ソース管理ビューには表示されません)。`,
+			);
+		}
+		await suggestEncodingSettings(context, selection, manual);
+		return;
+	}
+
+	if (!(await ensureGitAvailable())) {
+		return;
+	}
+
+	const root = status.repositoryRoot;
+	const dismissed = readStringRecord(context, GIT_PROMPT_DISMISSED_KEY);
+	if (status.kind === "covered") {
+		if (manual) {
+			void vscode.window.showInformationMessage(
+				`リポジトリ ${root} はワークスペースとして開かれています。サイドバーの「ソース管理」で差分を確認できます。`,
+			);
+			void vscode.commands.executeCommand("workbench.view.scm");
+		}
+	} else if (manual || dismissed[root.toLowerCase()] !== true) {
+		const openLabel = "リポジトリのフォルダーを開く";
+		const addLabel = "ワークスペースに追加";
+		const dismissLabel = "今後表示しない";
+		const message =
+			status.kind === "parent-of-workspace"
+				? `${path.basename(selection.path)} の Git リポジトリは上位の ${root} です。` +
+					"今のフォルダーのままだと VS Code は親フォルダーのリポジトリを自動では開きません。" +
+					"ソース管理で差分を見るには、リポジトリのフォルダーを開いてください。"
+				: `${path.basename(selection.path)} は Git リポジトリ ${root} 内にありますが、` +
+					"VS Code でこのフォルダーが開かれていないため、ソース管理(差分表示)に出てきません。";
+		const buttons =
+			status.kind === "parent-of-workspace"
+				? [openLabel, dismissLabel]
+				: [openLabel, addLabel, dismissLabel];
+		const choice = await vscode.window.showInformationMessage(message, ...buttons);
+		if (choice === openLabel) {
+			await savePendingSelection(context, root, selection);
+			await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(root), {
+				forceNewWindow: false,
+			});
+			return;
+		}
+		if (choice === addLabel) {
+			// フォルダー 0 → 1 個の追加では拡張ホストが再起動することがあるため、選択も引き継ぐ
+			await savePendingSelection(context, root, selection);
+			const count = vscode.workspace.workspaceFolders?.length ?? 0;
+			vscode.workspace.updateWorkspaceFolders(count, 0, { uri: vscode.Uri.file(root) });
+		} else if (choice === dismissLabel) {
+			dismissed[root.toLowerCase()] = true;
+			await context.globalState.update(GIT_PROMPT_DISMISSED_KEY, dismissed);
+		}
+	}
+
+	await suggestEncodingSettings(context, selection, manual);
+}
+
+/** git.path 設定(または PATH 上の git)で git.exe を実行できるか */
+function gitCandidates(): string[] {
+	const configured = vscode.workspace.getConfiguration("git").get<unknown>("path");
+	const list = Array.isArray(configured) ? configured : [configured];
+	const paths = list.filter(
+		(value): value is string => typeof value === "string" && value.trim() !== "",
+	);
+	return paths.length > 0 ? paths : ["git"];
+}
+
+function canRunGit(gitPath: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		execFile(gitPath, ["--version"], { windowsHide: true, timeout: 10_000 }, (error) => {
+			resolve(error === null);
+		});
+	});
+}
+
+async function ensureGitAvailable(): Promise<boolean> {
+	if (vscode.workspace.getConfiguration("git").get<boolean>("enabled") === false) {
+		void vscode.window.showWarningMessage(
+			"VS Code の設定 git.enabled が false のため、ソース管理(差分表示)が無効になっています。",
+		);
+		return false;
+	}
+	for (const candidate of gitCandidates()) {
+		if (await canRunGit(candidate)) {
+			return true;
+		}
+	}
+	const downloadLabel = "Git for Windows のダウンロードページを開く";
+	const choice = await vscode.window.showWarningMessage(
+		"git.exe が見つかりません。Visual Studio 2013 は git.exe なしで Git を扱えますが、" +
+			"VS Code のソース管理(差分表示)には Git for Windows のインストールが必要です。" +
+			"インストール済みなら設定 git.path に git.exe のフルパスを指定してください。",
+		downloadLabel,
+	);
+	if (choice === downloadLabel) {
+		void vscode.env.openExternal(vscode.Uri.parse("https://git-scm.com/download/win"));
+	}
+	return false;
+}
+
+/** 文字コード判定のために調べるソースの上限(大きなソリューションでも一瞬で終わる量) */
+const ENCODING_SAMPLE_LIMIT = 30;
+
+function collectSourcePaths(selection: LastSelection): string[] {
+	const results: VbprojParseResult[] = [];
+	if (selection.kind === "sln") {
+		const bundle = parseSolutionProjects(selection.path);
+		if (bundle !== undefined) {
+			results.push(...bundle.projectResults);
+		}
+	} else {
+		const xml = tryReadFile(selection.path);
+		if (xml !== undefined) {
+			results.push(parseVbproj(xml, selection.path, FS_DEPS));
+		}
+	}
+	return results
+		.flatMap((result) => result.items)
+		.filter((item) => item.kind === "Compile" && item.exists && item.sourcePath !== undefined)
+		.map((item) => item.sourcePath as string);
+}
+
+/**
+ * Shift_JIS のソースがあり、VS Code が UTF-8 固定で開く設定なら自動判定を勧める。
+ * 差分ビューも同じ設定で読むため、これをしないと差分が文字化けする。
+ * .vscode/settings.json を作るとリポジトリに未追跡ファイルが増えるので、ユーザー設定に書く。
+ */
+async function suggestEncodingSettings(
+	context: vscode.ExtensionContext,
+	selection: LastSelection,
+	manual: boolean,
+): Promise<void> {
+	if (!manual && context.globalState.get<boolean>(ENCODING_PROMPT_DISMISSED_KEY) === true) {
+		return;
+	}
+	const files = vscode.workspace.getConfiguration("files");
+	if (files.get<boolean>("autoGuessEncoding") === true) {
+		return;
+	}
+	const encoding = files.get<string>("encoding") ?? "utf8";
+	if (encoding !== "utf8" && encoding !== "utf8bom") {
+		return; // shiftjis などを明示設定済み
+	}
+	const sample = collectSourcePaths(selection).slice(0, ENCODING_SAMPLE_LIMIT);
+	const nonUtf8 = sample.filter((filePath) => {
+		try {
+			return looksLikeNonUtf8(fs.readFileSync(filePath));
+		} catch {
+			return false;
+		}
+	});
+	if (nonUtf8.length === 0) {
+		return;
+	}
+	const enableLabel = "文字コードの自動判定を有効にする";
+	const dismissLabel = "今後表示しない";
+	const choice = await vscode.window.showWarningMessage(
+		`Shift_JIS と思われるソースがあります(例: ${path.basename(nonUtf8[0] ?? "")})。` +
+			"VS Code の既定(UTF-8)のままだと、編集画面とソース管理の差分表示が文字化けします。" +
+			"ユーザー設定の files.autoGuessEncoding を有効にしますか?",
+		enableLabel,
+		dismissLabel,
+	);
+	if (choice === enableLabel) {
+		await files.update("autoGuessEncoding", true, vscode.ConfigurationTarget.Global);
+		void vscode.window.showInformationMessage(
+			"files.autoGuessEncoding を有効にしました。開いている .vb は一度閉じて開き直してください。",
+		);
+	} else if (choice === dismissLabel) {
+		await context.globalState.update(ENCODING_PROMPT_DISMISSED_KEY, true);
+	}
+}
+
+/** VS Code 組み込み Git 拡張の API のうち、ここで使う部分だけの型 */
+interface GitApiLike {
+	getRepository: (uri: vscode.Uri) => unknown;
+}
+
+function isGitApiLike(value: unknown): value is GitApiLike {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as Record<string, unknown>)["getRepository"] === "function"
+	);
+}
+
+async function getGitApi(): Promise<GitApiLike | undefined> {
+	const extension = vscode.extensions.getExtension<unknown>("vscode.git");
+	if (extension === undefined) {
+		return undefined;
+	}
+	try {
+		const exports: unknown = extension.isActive ? extension.exports : await extension.activate();
+		if (typeof exports !== "object" || exports === null) {
+			return undefined;
+		}
+		const getAPI = (exports as Record<string, unknown>)["getAPI"];
+		if (typeof getAPI !== "function") {
+			return undefined;
+		}
+		const api: unknown = getAPI.call(exports, 1);
+		return isGitApiLike(api) ? api : undefined;
+	} catch {
+		return undefined; // git.exe が無い・git.enabled=false など
+	}
+}
+
+/** ツリーのファイルについて、VS Code 標準の差分ビュー(HEAD との比較)を開く */
+async function openGitChanges(node: FileNode): Promise<void> {
+	const sourcePath = node.item.sourcePath;
+	if (sourcePath === undefined || !node.item.exists) {
+		void vscode.window.showWarningMessage(
+			`物理ファイルが無いため差分を表示できません: ${node.item.include}`,
+		);
+		return;
+	}
+	const uri = vscode.Uri.file(sourcePath);
+	const api = await getGitApi();
+	if (api === undefined) {
+		if (await ensureGitAvailable()) {
+			void vscode.window.showWarningMessage(
+				"VS Code の Git 拡張を利用できません(組み込み拡張「Git」が無効になっていないか確認してください)。",
+			);
+		}
+		return;
+	}
+	if (api.getRepository(uri) === null) {
+		const inWorkspace = workspaceFolderPaths().some((folder) =>
+			isSameOrInside(sourcePath, folder),
+		);
+		void vscode.window.showWarningMessage(
+			inWorkspace
+				? `${path.basename(sourcePath)} は Git リポジトリとして認識されていません(Git 管理外か、リポジトリの検出待ちです)。`
+				: `${path.basename(sourcePath)} のリポジトリが VS Code で開かれていません。` +
+					"ソリューションを右クリック →「Legacy VB: Open Git Repository Folder」でリポジトリのフォルダーを開いてください。",
+		);
+		return;
+	}
+	try {
+		await vscode.commands.executeCommand("git.openChange", uri);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		void vscode.window.showErrorMessage(`差分を開けませんでした: ${sourcePath}(${message})`);
+	}
 }

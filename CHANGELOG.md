@@ -1,5 +1,19 @@
 # Change Log
 
+## [0.11.0] - 2026-11-22
+
+- VS Code 標準のソース管理(Git の差分表示)と連携。
+  .sln / .vbproj を選んだとき、Git リポジトリのフォルダーが VS Code で開かれて
+  いなければ「リポジトリのフォルダーを開く」「ワークスペースに追加」を提案する
+  (開き直した後も選択中の .sln / .vbproj を引き継ぐ)
+- git.exe が見つからない場合に案内(VS2013 は git.exe なしで Git を扱えるが、
+  VS Code には Git for Windows が必要)
+- Shift_JIS のソースがあり files.autoGuessEncoding が無効なら、ユーザー設定で
+  有効にすることを提案(差分表示の文字化け対策)
+- ツリーのファイルの右クリックに「Legacy VB: Open Changes (Git)」を追加
+  (HEAD との差分を VS Code の差分ビューで開く)
+- ソリューション / プロジェクトの右クリックに「Legacy VB: Open Git Repository Folder」を追加
+
 ## [0.10.2] - 2026-11-22
 
 - 「デバッグなしで開始」で、.vbproj / .vbproj.user のプロパティ値の MSBuild

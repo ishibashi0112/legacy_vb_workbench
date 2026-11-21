@@ -17,6 +17,7 @@ import {
 	resolveLaunchPlan,
 	resolveRunSettings,
 	resolveSolutionProjectConfiguration,
+	unescapeMsbuild,
 } from "../services/runSettings";
 
 const PROJECT_DIR = path.resolve("/work/OrderApp");
@@ -296,6 +297,46 @@ suite("runSettings: resolveRunSettings", () => {
 		});
 		assert.strictEqual(settings.outputDir, path.join(PROJECT_DIR, "bin", "Debug"));
 		assert.ok(settings.diagnostics.some((d) => d.severity === "error"));
+	});
+});
+
+suite("runSettings: MSBuild エスケープ", () => {
+	test("unescapeMsbuild は %XX だけを戻し、それ以外の % は残す", () => {
+		assert.strictEqual(unescapeMsbuild("user%40%40%40DB%3bx%2a%3f%27%24%25"), "user@@@DB;x*?'$%");
+		assert.strictEqual(unescapeMsbuild("100% 完了 %zz %4"), "100% 完了 %zz %4");
+	});
+
+	test(".vbproj.user の StartArguments・作業ディレクトリ・外部プログラムのエスケープを解除する", () => {
+		// VS は @ を %40 として保存する(実機で @@@ 区切りの引数が %40%40%40 のまま渡った不具合)
+		const user = `<Project>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+    <StartArguments>user%40%40%40DB%40%40%40schema</StartArguments>
+    <StartWorkingDirectory>C:\\Data%3bOld\\</StartWorkingDirectory>
+    <StartProgram>C:\\Tools%40Host\\Host.exe</StartProgram>
+  </PropertyGroup>
+</Project>`;
+		const settings = resolveRunSettings({
+			projectPath: PROJECT_PATH,
+			projectXml: VBPROJ,
+			userXml: user,
+			configuration: "Debug",
+		});
+		assert.strictEqual(settings.startArguments, "user@@@DB@@@schema");
+		assert.strictEqual(settings.startWorkingDirectory, "C:\\Data;Old\\");
+		assert.strictEqual(settings.startProgram, "C:\\Tools@Host\\Host.exe");
+		assert.strictEqual(settings.startArgumentCandidates[0].value, "user@@@DB@@@schema");
+	});
+
+	test("未解決の $(...) を含む値はエスケープ解除しない", () => {
+		const xml = `<Project>
+  <PropertyGroup><OutputPath>$(Unknown)bin%40\\</OutputPath></PropertyGroup>
+</Project>`;
+		const settings = resolveRunSettings({
+			projectPath: PROJECT_PATH,
+			projectXml: xml,
+			configuration: "Debug",
+		});
+		assert.strictEqual(settings.outputDir, undefined);
 	});
 });
 

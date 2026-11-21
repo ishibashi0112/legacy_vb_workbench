@@ -338,16 +338,20 @@ export function resolveRunSettings(input: RunSettingsInput): ProjectRunSettings 
 		}
 	}
 
+	// MSBuild はプロパティ値をエスケープしたまま保持し、使う時点で解除する。
+	// 未解決の $(...) が残る値は解除しない(解除すると %24( 由来の文字と区別できない)
+	const finalize = (value: string): string => (/\$\(/.test(value) ? value : unescapeMsbuild(value));
 	const read = (name: string): string | undefined => {
 		const value = state.get(name.toLowerCase());
-		return value === undefined || value.trim() === "" ? undefined : value.trim();
+		return value === undefined || value.trim() === "" ? undefined : finalize(value.trim());
 	};
 
 	const rawOutputPath = read("OutputPath");
 	let outputDir: string | undefined;
-	if (rawOutputPath !== undefined && !/\$\(/.test(rawOutputPath)) {
+	if (rawOutputPath !== undefined && !/\$\(/.test(state.get("outputpath") ?? "")) {
 		outputDir = resolveWindowsPath(rawOutputPath, projectDir);
 	}
+	const rawStartArguments = nonEmpty(state.get("startarguments"));
 
 	return {
 		projectPath: input.projectPath,
@@ -362,16 +366,30 @@ export function resolveRunSettings(input: RunSettingsInput): ProjectRunSettings 
 		startAction: read("StartAction") ?? "Project",
 		startProgram: read("StartProgram"),
 		// 引数は前後の空白も意味を持ち得るため trim しない
-		startArguments: nonEmpty(state.get("startarguments")),
+		startArguments: rawStartArguments === undefined ? undefined : finalize(rawStartArguments),
 		startWorkingDirectory: read("StartWorkingDirectory"),
 		userFileFound: input.userXml !== undefined,
 		startArgumentCandidates: startArgumentCandidates.map((candidate) => ({
 			...candidate,
+			value: finalize(candidate.value),
 			// 後の定義で上書きされたものは採用扱いにしない
 			used: candidate.used && candidate === lastUsed(startArgumentCandidates),
 		})),
 		diagnostics,
 	};
+}
+
+/**
+ * MSBuild のエスケープ(%XX)を解除する。
+ * Visual Studio は .vbproj / .vbproj.user へ書き込む際に MSBuild の特殊文字
+ * (% $ @ ' ; ? *)を %25 %24 %40 %27 %3b %3f %2a にエスケープする。
+ * MSBuild 自身(EscapingUtilities.UnescapeAll)と同じく、16 進 2 桁の %XX だけを
+ * 1 文字へ戻し、それ以外の % はそのまま残す。
+ */
+export function unescapeMsbuild(value: string): string {
+	return value.replace(/%([0-9A-Fa-f]{2})/g, (_whole, hex: string) =>
+		String.fromCharCode(parseInt(hex, 16)),
+	);
 }
 
 function lastUsed(

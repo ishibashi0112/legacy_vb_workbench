@@ -199,7 +199,22 @@ export interface ProjectRunSettings {
 	startWorkingDirectory?: string;
 	/** .vbproj.user を読めたか */
 	userFileFound: boolean;
+	/**
+	 * .vbproj / .vbproj.user に書かれた StartArguments のすべて(条件不一致も含む)。
+	 * 構成・プラットフォームが合わずに引数が使われなかったとき、
+	 * どの条件で何が保存されているかを利用者に示すために使う。
+	 */
+	startArgumentCandidates: StartArgumentCandidate[];
 	diagnostics: ParseDiagnostic[];
+}
+
+export interface StartArgumentCandidate {
+	source: string;
+	/** PropertyGroup / プロパティの Condition(無条件なら undefined) */
+	condition?: string;
+	value: string;
+	/** 今回の構成で採用されたか */
+	used: boolean;
 }
 
 export interface RunSettingsInput {
@@ -267,6 +282,7 @@ export function resolveRunSettings(input: RunSettingsInput): ProjectRunSettings 
 	}
 
 	const reportedConditions = new Set<string>();
+	const startArgumentCandidates: StartArgumentCandidate[] = [];
 	for (const source of sources) {
 		const properties = readProperties(source.xml, source.label, diagnostics);
 		if (properties === undefined) {
@@ -295,6 +311,17 @@ export function resolveRunSettings(input: RunSettingsInput): ProjectRunSettings 
 						});
 					}
 				}
+			}
+			if (key === "startarguments" && property.value !== "") {
+				const conditions = [property.groupCondition, property.propertyCondition].filter(
+					(condition): condition is string => condition !== undefined,
+				);
+				startArgumentCandidates.push({
+					source: source.label,
+					condition: conditions.length === 0 ? undefined : conditions.join(" かつ "),
+					value: property.value,
+					used: !skip,
+				});
 			}
 			if (skip) {
 				continue;
@@ -338,8 +365,19 @@ export function resolveRunSettings(input: RunSettingsInput): ProjectRunSettings 
 		startArguments: nonEmpty(state.get("startarguments")),
 		startWorkingDirectory: read("StartWorkingDirectory"),
 		userFileFound: input.userXml !== undefined,
+		startArgumentCandidates: startArgumentCandidates.map((candidate) => ({
+			...candidate,
+			// 後の定義で上書きされたものは採用扱いにしない
+			used: candidate.used && candidate === lastUsed(startArgumentCandidates),
+		})),
 		diagnostics,
 	};
+}
+
+function lastUsed(
+	candidates: readonly StartArgumentCandidate[],
+): StartArgumentCandidate | undefined {
+	return [...candidates].reverse().find((candidate) => candidate.used);
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

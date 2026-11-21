@@ -149,6 +149,56 @@ suite("runSettings: resolveRunSettings", () => {
 		assert.strictEqual(settings.outputDir, path.join(PROJECT_DIR, "bin", "x86", "Debug"));
 		// .user には Debug|x86 の設定が無い
 		assert.strictEqual(settings.startArguments, undefined);
+		// 別構成向けの引数は候補として残す(利用者に選んでもらうため)
+		assert.deepStrictEqual(
+			settings.startArgumentCandidates.map((c) => [c.value, c.used]),
+			[
+				['/user admin /mode "テスト 環境"', false],
+				["/mode release", false],
+			],
+		);
+		assert.strictEqual(
+			settings.startArgumentCandidates[0].condition,
+			"'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'",
+		);
+		assert.strictEqual(settings.startArgumentCandidates[0].source, "OrderApp.vbproj.user");
+	});
+
+	test("StartArguments の候補には採用されたものが印付きで入る", () => {
+		const settings = resolveRunSettings({
+			projectPath: PROJECT_PATH,
+			projectXml: VBPROJ,
+			userXml: VBPROJ_USER,
+			configuration: "Debug",
+		});
+		assert.deepStrictEqual(
+			settings.startArgumentCandidates.map((c) => [c.value, c.used]),
+			[
+				['/user admin /mode "テスト 環境"', true],
+				["/mode release", false],
+			],
+		);
+	});
+
+	test("同じ構成で後から上書きされた StartArguments は採用扱いにしない", () => {
+		const user = `<Project>
+  <PropertyGroup><StartArguments>/first</StartArguments></PropertyGroup>
+  <PropertyGroup><StartArguments>/second</StartArguments></PropertyGroup>
+</Project>`;
+		const settings = resolveRunSettings({
+			projectPath: PROJECT_PATH,
+			projectXml: VBPROJ,
+			userXml: user,
+			configuration: "Debug",
+		});
+		assert.strictEqual(settings.startArguments, "/second");
+		assert.deepStrictEqual(
+			settings.startArgumentCandidates.map((c) => [c.value, c.used, c.condition]),
+			[
+				["/first", false, undefined],
+				["/second", true, undefined],
+			],
+		);
 	});
 
 	test(".vbproj.user が無くても EXE の設定は読める", () => {
@@ -338,6 +388,7 @@ suite("runSettings: resolveLaunchPlan", () => {
 		outputDir: path.join(PROJECT_DIR, "bin", "Debug"),
 		startAction: "Project",
 		userFileFound: true,
+		startArgumentCandidates: [],
 		diagnostics: [],
 		...overrides,
 	});

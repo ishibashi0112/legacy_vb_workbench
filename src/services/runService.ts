@@ -51,6 +51,9 @@ export class RunService {
 		this.channel.appendLine("========================================");
 		this.channel.appendLine(`[${new Date().toLocaleString()}] 起動: ${plan.exePath}`);
 		this.channel.appendLine(`  引数: ${plan.argumentsLine === "" ? "(なし)" : plan.argumentsLine}`);
+		this.channel.appendLine(
+			`  コマンドライン: ${[invocation.argv0, ...invocation.args].join(" ")}`,
+		);
 		this.channel.appendLine(`  作業ディレクトリ: ${plan.workingDirectory}`);
 		for (const note of plan.notes) {
 			this.channel.appendLine(`  ※ ${note}`);

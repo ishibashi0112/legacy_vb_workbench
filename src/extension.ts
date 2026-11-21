@@ -826,6 +826,34 @@ async function startWithoutDebugging(ctx: RunCommandContext, node: unknown): Pro
 		solutionDir,
 	});
 
+	// 構成・プラットフォームが合わず引数が使われなかった場合は、保存済みの引数から選んでもらう
+	// (推測で別の構成の引数を使うことはしない)
+	let argumentsOverride: string | undefined;
+	const unmatchedArguments = settings.startArgumentCandidates.filter((candidate) => !candidate.used);
+	if (settings.startArguments === undefined && unmatchedArguments.length > 0) {
+		const picked = await vscode.window.showQuickPick(
+			[
+				...unmatchedArguments.map((candidate) => ({
+					label: candidate.value,
+					description: candidate.condition ?? "(条件なし)",
+					detail: `${candidate.source} に保存されている引数`,
+					value: candidate.value,
+				})),
+				{ label: "引数なしで起動", description: "", detail: undefined, value: "" },
+			],
+			{
+				title: `今回の構成(${settings.configuration}|${settings.platform ?? "プラットフォーム不明"})向けのコマンドライン引数がありません`,
+				placeHolder:
+					".vbproj.user には別の構成・プラットフォーム向けの引数が保存されています。使う引数を選んでください",
+				ignoreFocusOut: true,
+			},
+		);
+		if (picked === undefined) {
+			return;
+		}
+		argumentsOverride = picked.value;
+	}
+
 	// 4. ビルド(既定で有効。VS の F5 / Ctrl+F5 と同じく起動前にビルドする)
 	const buildFirst =
 		vscode.workspace.getConfiguration("legacyVbWorkbench").get<boolean>("runBuildBeforeStart") ??
@@ -866,6 +894,14 @@ async function startWithoutDebugging(ctx: RunCommandContext, node: unknown): Pro
 		return;
 	}
 	const plan = result.plan;
+	if (argumentsOverride !== undefined) {
+		plan.argumentsLine = argumentsOverride;
+		plan.notes.push(
+			argumentsOverride === ""
+				? "引数: 構成に合う引数がないため、選択により引数なしで起動します"
+				: "引数: 構成に合う引数がないため、選択された別構成の引数を使います",
+		);
+	}
 	plan.notes.unshift(
 		...mappingNotes,
 		settings.userFileFound
@@ -903,6 +939,18 @@ function printRunDiagnostics(
 ): void {
 	for (const note of notes) {
 		runChannel.appendLine(`  ※ ${note}`);
+	}
+	runChannel.appendLine(
+		`  設定の検索条件: ${settings.configuration}|${settings.platform ?? "(プラットフォーム不明)"}`,
+	);
+	if (settings.startArgumentCandidates.length === 0) {
+		runChannel.appendLine("  StartArguments: .vbproj / .vbproj.user のどちらにもありません");
+	}
+	for (const candidate of settings.startArgumentCandidates) {
+		runChannel.appendLine(
+			`  StartArguments [${candidate.used ? "採用" : "不一致"}] ${candidate.source}` +
+				` / ${candidate.condition ?? "条件なし"}: ${candidate.value}`,
+		);
 	}
 	for (const diagnostic of settings.diagnostics) {
 		runChannel.appendLine(`  [${diagnostic.severity}] ${diagnostic.message}`);

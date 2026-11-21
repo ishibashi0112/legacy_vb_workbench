@@ -26,6 +26,15 @@ import {
 	decodeSourceBuffer,
 	type RepomixSource,
 } from "./services/repomixExporter";
+import { RunService } from "./services/runService";
+import {
+	isRunnableOutputType,
+	findBuildOutputPath,
+	resolveLaunchPlan,
+	resolveRunSettings,
+	resolveSolutionProjectConfiguration,
+	type ProjectRunSettings,
+} from "./services/runSettings";
 import { launchVisualStudio } from "./services/visualStudioLauncher";
 import { parseSln } from "./slnParser";
 import type {
@@ -33,12 +42,20 @@ import type {
 	ParseDiagnostic,
 	ProjectItemStatus,
 	SlnParseResult,
+	SolutionProject,
 	VbprojParseResult,
 } from "./types";
 import { parseVbproj } from "./vbprojParser";
 
 /** 直近に選択した .vbproj / .sln(手動更新・起動時復元で再利用) */
 const LAST_SELECTION_KEY = "legacyVbWorkbench.lastSelection";
+
+/**
+ * .sln ごとのスタートアッププロジェクト(キーは小文字化した .sln パス)。
+ * Visual Studio はこれをバイナリの .suo に保存しており読めないため、
+ * 拡張側で一度選んでもらって記憶する。
+ */
+const STARTUP_PROJECTS_KEY = "legacyVbWorkbench.startupProjects";
 
 interface LastSelection {
 	kind: "vbproj" | "sln";
@@ -82,7 +99,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	const channel = vscode.window.createOutputChannel("Legacy VB Workbench");
 	const buildChannel = vscode.window.createOutputChannel("Legacy VB Build");
 	const buildService = new BuildService(buildChannel);
-	context.subscriptions.push(buildChannel);
+	const runChannel = vscode.window.createOutputChannel("Legacy VB Run");
+	const runService = new RunService(runChannel);
+	context.subscriptions.push(buildChannel, runChannel);
 	const provider = new LegacyProjectTreeProvider();
 	const treeView = vscode.window.createTreeView("legacyVbWorkbench.projects", {
 		treeDataProvider: provider,
@@ -95,9 +114,12 @@ export function activate(context: vscode.ExtensionContext): void {
 	const runSelection = (selection: LastSelection, quiet = false): void => {
 		if (selection.kind === "sln") {
 			runParseSolution(selection.path, channel, provider, { quiet });
+			provider.setStartupProject(getStartupProject(context, selection.path));
 		} else {
 			runParseVbproj(selection.path, channel, provider, { quiet });
+			provider.setStartupProject(undefined);
 		}
+		void vscode.commands.executeCommand("setContext", "legacyVbWorkbench.hasTarget", true);
 	};
 
 	context.subscriptions.push(
@@ -154,6 +176,23 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand("legacyVbWorkbench.buildSolution", (node: unknown) => {
 			void runBuild(buildService, buildChannel, resolveBuildTarget(node, context));
 		}),
+
+		vscode.commands.registerCommand(
+			"legacyVbWorkbench.startWithoutDebugging",
+			(node: unknown) => {
+				void startWithoutDebugging(
+					{ context, buildService, buildChannel, runService, runChannel, provider },
+					node,
+				);
+			},
+		),
+
+		vscode.commands.registerCommand(
+			"legacyVbWorkbench.setStartupProject",
+			(node: unknown) => {
+				void setStartupProjectCommand(context, provider, node);
+			},
+		),
 
 		vscode.commands.registerCommand(
 			"legacyVbWorkbench.openInVisualStudio",
@@ -358,35 +397,44 @@ async function promptForExecutable(
 	return exePath;
 }
 
+/** ビルドの結果。output は MSBuild の出力全文(EXE パスの取得に使う) */
+interface BuildOutcome {
+	status: "succeeded" | "failed" | "cancelled" | "not-started";
+	output: string;
+}
+
+const NOT_STARTED: BuildOutcome = { status: "not-started", output: "" };
+
 async function runBuild(
 	buildService: BuildService,
 	buildChannel: vscode.OutputChannel,
 	targetPath: string | undefined,
-): Promise<void> {
+	options: { notifySuccess?: boolean } = {},
+): Promise<BuildOutcome> {
 	if (process.platform !== "win32") {
 		void vscode.window.showWarningMessage(
 			"MSBuild ビルドは Windows 環境でのみ実行できます。",
 		);
-		return;
+		return NOT_STARTED;
 	}
 	if (targetPath === undefined) {
 		void vscode.window.showWarningMessage(
 			"先に「Legacy VB: Select Solution」等でビルド対象を選択してください。",
 		);
-		return;
+		return NOT_STARTED;
 	}
 	if (buildService.isRunning) {
 		void vscode.window.showWarningMessage(
 			"ビルドが実行中です。完了を待つか、通知からキャンセルしてください。",
 		);
-		return;
+		return NOT_STARTED;
 	}
 
 	const located = await locateMsbuild(locatorDeps("msbuildPath"));
 	const msbuildPath =
 		located?.path ?? (await promptForExecutable("MSBuild.exe", "msbuildPath"));
 	if (msbuildPath === undefined) {
-		return;
+		return NOT_STARTED;
 	}
 
 	const config = vscode.workspace.getConfiguration("legacyVbWorkbench");
@@ -396,13 +444,14 @@ async function runBuild(
 		encodingRaw === "cp932" || encodingRaw === "utf8" ? encodingRaw : "auto";
 
 	buildChannel.show(true);
-	await vscode.window.withProgress(
+	const chunks: string[] = [];
+	return vscode.window.withProgress(
 		{
 			location: vscode.ProgressLocation.Notification,
 			title: `MSBuild ビルド中: ${path.basename(targetPath)}(${configuration})`,
 			cancellable: true,
 		},
-		async (_progress, token) => {
+		async (_progress, token): Promise<BuildOutcome> => {
 			token.onCancellationRequested(() => buildService.cancel());
 			try {
 				const exitCode = await buildService.run(
@@ -410,23 +459,31 @@ async function runBuild(
 					targetPath,
 					configuration,
 					encoding,
+					(text) => chunks.push(text),
 				);
+				const output = chunks.join("");
 				if (token.isCancellationRequested || exitCode === null) {
 					void vscode.window.showWarningMessage("ビルドをキャンセルしました。");
-				} else if (exitCode === 0) {
-					void vscode.window.showInformationMessage(
-						`ビルド成功(${configuration})`,
-					);
-				} else {
-					void vscode.window.showErrorMessage(
-						`ビルド失敗(exit code: ${exitCode})。Output「Legacy VB Build」を確認してください。`,
-					);
+					return { status: "cancelled", output };
 				}
+				if (exitCode === 0) {
+					if (options.notifySuccess !== false) {
+						void vscode.window.showInformationMessage(
+							`ビルド成功(${configuration})`,
+						);
+					}
+					return { status: "succeeded", output };
+				}
+				void vscode.window.showErrorMessage(
+					`ビルド失敗(exit code: ${exitCode})。Output「Legacy VB Build」を確認してください。`,
+				);
+				return { status: "failed", output };
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				void vscode.window.showErrorMessage(
 					`MSBuild を起動できませんでした: ${message}`,
 				);
+				return NOT_STARTED;
 			}
 		},
 	);
@@ -462,6 +519,393 @@ async function openInVisualStudio(targetPath: string | undefined): Promise<void>
 		void vscode.window.showErrorMessage(
 			`Visual Studio を起動できませんでした: ${message}`,
 		);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// デバッグなしで開始(Visual Studio の Ctrl+F5 相当)
+// ---------------------------------------------------------------------------
+
+interface RunCommandContext {
+	context: vscode.ExtensionContext;
+	buildService: BuildService;
+	buildChannel: vscode.OutputChannel;
+	runService: RunService;
+	runChannel: vscode.OutputChannel;
+	provider: LegacyProjectTreeProvider;
+}
+
+function readStartupMap(context: vscode.ExtensionContext): Record<string, string> {
+	const raw = context.workspaceState.get<unknown>(STARTUP_PROJECTS_KEY);
+	const result: Record<string, string> = {};
+	if (typeof raw !== "object" || raw === null) {
+		return result;
+	}
+	for (const [key, value] of Object.entries(raw)) {
+		if (typeof value === "string") {
+			result[key] = value;
+		}
+	}
+	return result;
+}
+
+function getStartupProject(
+	context: vscode.ExtensionContext,
+	solutionPath: string,
+): string | undefined {
+	return readStartupMap(context)[solutionPath.toLowerCase()];
+}
+
+async function saveStartupProject(
+	context: vscode.ExtensionContext,
+	solutionPath: string,
+	projectPath: string,
+): Promise<void> {
+	const map = readStartupMap(context);
+	map[solutionPath.toLowerCase()] = projectPath;
+	await context.workspaceState.update(STARTUP_PROJECTS_KEY, map);
+}
+
+/** ツリーのプロジェクトノードから .vbproj パスを取り出す */
+function projectPathFromNode(node: unknown): string | undefined {
+	if (typeof node !== "object" || node === null) {
+		return undefined;
+	}
+	const record = node as Record<string, unknown>;
+	return record["type"] === "project" && typeof record["projectPath"] === "string"
+		? record["projectPath"]
+		: undefined;
+}
+
+function samePath(a: string, b: string): boolean {
+	return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
+
+function currentConfiguration(): string {
+	return (
+		vscode.workspace.getConfiguration("legacyVbWorkbench").get<string>("buildConfiguration") ??
+		"Debug"
+	);
+}
+
+function readUserFile(projectPath: string): string | undefined {
+	try {
+		return fs.readFileSync(`${projectPath}.user`, "utf8");
+	} catch {
+		return undefined;
+	}
+}
+
+/** .sln 内の実在するプロジェクトを読み、実行設定を付けて返す */
+function loadSolutionProjects(
+	solutionPath: string,
+): Array<{ project: SolutionProject; settings: ProjectRunSettings }> | undefined {
+	const content = tryReadFile(solutionPath);
+	if (content === undefined) {
+		return undefined;
+	}
+	const sln = parseSln(content, solutionPath, FS_DEPS);
+	const configuration = currentConfiguration();
+	const loaded: Array<{ project: SolutionProject; settings: ProjectRunSettings }> = [];
+	for (const project of sln.projects) {
+		if (!project.exists) {
+			continue;
+		}
+		try {
+			const projectXml = fs.readFileSync(project.absolutePath, "utf8");
+			loaded.push({
+				project,
+				settings: resolveRunSettings({
+					projectPath: project.absolutePath,
+					projectXml,
+					userXml: readUserFile(project.absolutePath),
+					configuration,
+				}),
+			});
+		} catch {
+			// 読めないプロジェクトは候補から外す(ツリー側で警告済み)
+		}
+	}
+	return loaded;
+}
+
+function canStart(settings: ProjectRunSettings): boolean {
+	return (
+		isRunnableOutputType(settings.outputType) ||
+		settings.startAction.toLowerCase() === "program"
+	);
+}
+
+/**
+ * .sln のスタートアッププロジェクトを決める。
+ * 記憶済みならそれ、起動可能なプロジェクトが 1 つならそれ、
+ * 複数なら選んでもらって記憶する。
+ */
+async function pickStartupProject(
+	context: vscode.ExtensionContext,
+	solutionPath: string,
+	forceAsk: boolean,
+): Promise<string | undefined> {
+	const loaded = loadSolutionProjects(solutionPath);
+	if (loaded === undefined) {
+		return undefined;
+	}
+	if (loaded.length === 0) {
+		void vscode.window.showErrorMessage(
+			"この .sln に起動できる VB プロジェクトが見つかりません。",
+		);
+		return undefined;
+	}
+	const remembered = getStartupProject(context, solutionPath);
+	if (
+		!forceAsk &&
+		remembered !== undefined &&
+		loaded.some(({ project }) => samePath(project.absolutePath, remembered))
+	) {
+		return remembered;
+	}
+	const runnable = loaded.filter(({ settings }) => canStart(settings));
+	if (!forceAsk && runnable.length === 1) {
+		return runnable[0].project.absolutePath;
+	}
+	const candidates = runnable.length > 0 ? runnable : loaded;
+	const firstPath = loaded[0].project.absolutePath;
+	const picked = await vscode.window.showQuickPick(
+		candidates.map(({ project, settings }) => ({
+			label: project.name,
+			description: [
+				settings.outputType ?? "",
+				samePath(project.absolutePath, firstPath) ? "(.sln の先頭 = Visual Studio の既定)" : "",
+				remembered !== undefined && samePath(project.absolutePath, remembered) ? "現在のスタートアップ" : "",
+			]
+				.filter((part) => part !== "")
+				.join(" "),
+			detail: project.absolutePath,
+			projectPath: project.absolutePath,
+		})),
+		{
+			title: "スタートアッププロジェクトを選択",
+			placeHolder:
+				"起動するプロジェクトを選んでください(この .sln について記憶します。後から「Set as Startup Project」で変更できます)",
+		},
+	);
+	if (picked === undefined) {
+		return undefined;
+	}
+	await saveStartupProject(context, solutionPath, picked.projectPath);
+	return picked.projectPath;
+}
+
+async function setStartupProjectCommand(
+	context: vscode.ExtensionContext,
+	provider: LegacyProjectTreeProvider,
+	node: unknown,
+): Promise<void> {
+	const last = context.workspaceState.get<unknown>(LAST_SELECTION_KEY);
+	if (!isLastSelection(last) || last.kind !== "sln") {
+		void vscode.window.showInformationMessage(
+			"スタートアッププロジェクトは .sln を選択しているときに設定できます(.vbproj 単体ではそのプロジェクトを起動します)。",
+		);
+		return;
+	}
+	const fromNode = projectPathFromNode(node);
+	const projectPath = fromNode ?? (await pickStartupProject(context, last.path, true));
+	if (projectPath === undefined) {
+		return;
+	}
+	if (fromNode !== undefined) {
+		await saveStartupProject(context, last.path, fromNode);
+	}
+	provider.setStartupProject(projectPath);
+	void vscode.window.showInformationMessage(
+		`スタートアッププロジェクト: ${path.basename(projectPath)}`,
+	);
+}
+
+/** ビルドして EXE を起動する(デバッガーは接続しない) */
+async function startWithoutDebugging(ctx: RunCommandContext, node: unknown): Promise<void> {
+	const { context, runService, runChannel } = ctx;
+	if (process.platform !== "win32") {
+		void vscode.window.showWarningMessage("アプリの起動は Windows 環境でのみ実行できます。");
+		return;
+	}
+	const last = context.workspaceState.get<unknown>(LAST_SELECTION_KEY);
+	const lastSelection = isLastSelection(last) ? last : undefined;
+
+	// 1. ビルド対象とスタートアッププロジェクトを決める
+	let buildTarget: string | undefined;
+	let startupPath: string | undefined;
+	const nodeProject = projectPathFromNode(node);
+	if (nodeProject !== undefined) {
+		// プロジェクトの右クリック → そのプロジェクトを起動(ビルドは選択中の .sln 単位)
+		startupPath = nodeProject;
+		buildTarget = lastSelection?.kind === "sln" ? lastSelection.path : nodeProject;
+	} else {
+		buildTarget = resolveBuildTarget(node, context);
+		if (buildTarget === undefined) {
+			void vscode.window.showWarningMessage(
+				"先に「Legacy VB: Select Solution」等で対象を選択してください。",
+			);
+			return;
+		}
+		if (/\.sln$/i.test(buildTarget)) {
+			startupPath = await pickStartupProject(context, buildTarget, false);
+			if (startupPath !== undefined) {
+				ctx.provider.setStartupProject(startupPath);
+			}
+		} else {
+			startupPath = buildTarget;
+		}
+	}
+	if (startupPath === undefined) {
+		return;
+	}
+
+	// 2. 前回起動したアプリが動いていると EXE がロックされビルドが失敗する
+	if (runService.runningCount > 0) {
+		const choice = await vscode.window.showWarningMessage(
+			"前回起動したアプリがまだ実行中です。",
+			{
+				modal: true,
+				detail:
+					"実行中の EXE はロックされるため、ビルドで上書きできません。終了してから再ビルド・起動しますか?",
+			},
+			"終了して起動",
+		);
+		if (choice !== "終了して起動") {
+			return;
+		}
+		await runService.killAll();
+	}
+
+	// 3. 実行設定(.vbproj / .vbproj.user)を読む
+	const configuration = currentConfiguration();
+	const projectXml = tryReadFile(startupPath);
+	if (projectXml === undefined) {
+		return;
+	}
+	let projectConfiguration = configuration;
+	let platform: string | undefined;
+	let solutionDir: string | undefined;
+	const mappingNotes: string[] = [];
+	if (/\.sln$/i.test(buildTarget)) {
+		const slnContent = tryReadFile(buildTarget);
+		const slnProject =
+			slnContent === undefined
+				? undefined
+				: parseSln(slnContent, buildTarget, FS_DEPS).projects.find((project) =>
+						samePath(project.absolutePath, startupPath),
+					);
+		solutionDir = path.dirname(buildTarget);
+		if (slnContent !== undefined && slnProject !== undefined) {
+			const mapping = resolveSolutionProjectConfiguration(
+				slnContent,
+				slnProject.projectGuid,
+				configuration,
+			);
+			if (mapping !== undefined) {
+				projectConfiguration = mapping.configuration;
+				platform = mapping.platform;
+				mappingNotes.push(
+					`構成: ソリューション ${configuration}|${mapping.solutionPlatform} → プロジェクト ${mapping.configuration}|${mapping.platform}`,
+				);
+				if (!mapping.builds) {
+					mappingNotes.push(
+						"このプロジェクトはソリューション構成でビルド対象外になっています(構成マネージャーの「ビルド」が未チェック)",
+					);
+				}
+			}
+		}
+	}
+	const settings = resolveRunSettings({
+		projectPath: startupPath,
+		projectXml,
+		userXml: readUserFile(startupPath),
+		configuration: projectConfiguration,
+		platform,
+		solutionDir,
+	});
+
+	// 4. ビルド(既定で有効。VS の F5 / Ctrl+F5 と同じく起動前にビルドする)
+	const buildFirst =
+		vscode.workspace.getConfiguration("legacyVbWorkbench").get<boolean>("runBuildBeforeStart") ??
+		true;
+	let buildOutput = "";
+	if (buildFirst) {
+		const outcome = await runBuild(ctx.buildService, ctx.buildChannel, buildTarget, {
+			notifySuccess: false,
+		});
+		if (outcome.status !== "succeeded") {
+			return; // 失敗・キャンセルの通知は runBuild 側で表示済み
+		}
+		buildOutput = outcome.output;
+	}
+
+	// 5. 起動計画を立てる
+	const result = resolveLaunchPlan(
+		settings,
+		findBuildOutputPath(buildOutput, settings.projectName),
+		{
+			fileExists: (absolutePath) => fs.existsSync(absolutePath),
+			directoryExists: (absolutePath) => {
+				try {
+					return fs.statSync(absolutePath).isDirectory();
+				} catch {
+					return false;
+				}
+			},
+		},
+	);
+	runChannel.show(true);
+	if (!result.ok) {
+		runChannel.appendLine("========================================");
+		runChannel.appendLine(`[${new Date().toLocaleString()}] 起動できません: ${startupPath}`);
+		runChannel.appendLine(`  ${result.reason}`);
+		printRunDiagnostics(settings, mappingNotes, runChannel);
+		void vscode.window.showErrorMessage(`起動できません: ${result.reason}`);
+		return;
+	}
+	const plan = result.plan;
+	plan.notes.unshift(
+		...mappingNotes,
+		settings.userFileFound
+			? `起動設定: ${path.basename(startupPath)}.user を読み込みました`
+			: `起動設定: ${path.basename(startupPath)}.user がないため、引数なしで起動します`,
+	);
+
+	// 6. 起動して終了を見守る
+	const launched = runService.launch(plan);
+	printRunDiagnostics(settings, [], runChannel);
+	const exeName = path.basename(plan.exePath);
+	void vscode.window.showInformationMessage(`起動しました: ${exeName}`);
+	try {
+		const exit = await launched.exited;
+		if (exit.description?.abnormal === true) {
+			const choice = await vscode.window.showWarningMessage(
+				`${exeName} が異常終了しました(${exit.description.hex}` +
+					`${exit.description.meaning === undefined ? "" : `: ${exit.description.meaning}`})。`,
+				"Output を表示",
+			);
+			if (choice === "Output を表示") {
+				runChannel.show();
+			}
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		void vscode.window.showErrorMessage(`${exeName} を起動できませんでした: ${message}`);
+	}
+}
+
+function printRunDiagnostics(
+	settings: ProjectRunSettings,
+	notes: readonly string[],
+	runChannel: vscode.OutputChannel,
+): void {
+	for (const note of notes) {
+		runChannel.appendLine(`  ※ ${note}`);
+	}
+	for (const diagnostic of settings.diagnostics) {
+		runChannel.appendLine(`  [${diagnostic.severity}] ${diagnostic.message}`);
 	}
 }
 

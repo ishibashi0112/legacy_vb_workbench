@@ -1,5 +1,24 @@
 # Change Log
 
+## [0.10.0] - 2026-11-21
+
+- 「デバッグなしで開始」(`Legacy VB: Start Without Debugging`)を追加。
+  Visual Studio の Ctrl+F5 相当で、ビルド → EXE 起動を 1 操作で行う
+  - コマンドライン引数・作業ディレクトリ・外部プログラムの開始は
+    VS2013 のデバッグタブが保存する `<プロジェクト>.vbproj.user` から読む
+  - EXE の場所はビルド出力の `プロジェクト名 -> パス` 行(MSBuild の評価結果)を
+    優先し、取れなければ OutputPath + AssemblyName から求める
+  - .sln の構成対応表(ProjectConfigurationPlatforms)からプロジェクト側の
+    構成・プラットフォームを決める
+  - アプリの標準出力・標準エラー・終了コードを Output「Legacy VB Run」に記録。
+    異常終了時は Windows イベントログから .NET の未処理例外
+    (例外の型・スタックトレース)を取得して表示
+  - 起動中のアプリがあると EXE がロックされるため、再実行時に終了を確認する
+  - ツールバーの ▶ ボタン・右クリック・Ctrl+F5 から実行可能
+- スタートアッププロジェクトの指定(`Legacy VB: Set as Startup Project`)を追加。
+  VS はこれを .suo(バイナリ)に保存していて読めないため、拡張側で記憶する
+- 設定 `runBuildBeforeStart`(既定 true)を追加
+
 ## [0.9.0] - 2026-08-01
 
 - 厳格マスクを既定化(slnmix v0.6.0 と同一コア)

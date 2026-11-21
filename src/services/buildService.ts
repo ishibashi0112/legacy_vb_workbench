@@ -90,12 +90,14 @@ export class BuildService {
 	/**
 	 * ビルドを実行し、終了コードを返す(シグナル終了・キャンセル時は null)。
 	 * 実行中に再度呼んではならない(呼び出し側で isRunning を確認する)。
+	 * onOutput にはデコード済みの出力が渡る(EXE パスの取得などに使う)。
 	 */
 	run(
 		msbuildPath: string,
 		targetPath: string,
 		configuration: string,
 		encoding: BuildOutputEncoding,
+		onOutput?: (text: string) => void,
 	): Promise<number | null> {
 		const args = buildMsbuildArgs(targetPath, configuration);
 		this.channel.appendLine("========================================");
@@ -113,7 +115,9 @@ export class BuildService {
 			const decoders = [child.stdout, child.stderr].map((stream) => {
 				const decoder = new BuildOutputDecoder(encoding);
 				stream.on("data", (chunk: Buffer) => {
-					this.channel.append(decoder.push(chunk));
+					const text = decoder.push(chunk);
+					this.channel.append(text);
+					onOutput?.(text);
 				});
 				return decoder;
 			});
@@ -125,7 +129,9 @@ export class BuildService {
 			child.on("close", (code, signal) => {
 				this.current = undefined;
 				for (const decoder of decoders) {
-					this.channel.append(decoder.flush());
+					const text = decoder.flush();
+					this.channel.append(text);
+					onOutput?.(text);
 				}
 				this.channel.appendLine("");
 				this.channel.appendLine(
